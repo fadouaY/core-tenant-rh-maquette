@@ -121,7 +121,7 @@ input, select, textarea { font: inherit; color: inherit; }
 .nav-backdrop { display: none; }
 
 .content { flex: 1; min-width: 0; padding: 22px 28px 48px; outline: none; }
-.page { max-width: 1320px; }
+.page { width: 100%; }
 .page > * + * { margin-top: 16px; }
 
 /* ============ En-têtes, sections ============ */
@@ -679,7 +679,7 @@ body, .shell { background: var(--app-bg); }
   border: 1px solid #e3e8ef; border-radius: 14px; box-shadow: var(--card-shadow);
   min-height: calc(100vh - 56px - 26px);
 }
-.page { max-width: 1360px; }
+.page { max-width: none; }
 .page-header h1, .profile-header h1 { font-size: 18px; color: #0f172a; }
 
 /* Logos d'application assortis */
