@@ -1,6 +1,6 @@
 // Numérotation des employés (numéro de souche) : format et compteur des matricules attribués à la création.
 import { useEffect, useState } from 'react';
-import { Hash, RotateCcw, Save } from 'lucide-react';
+import { IdCard, RotateCcw, Save } from 'lucide-react';
 import { useCompanyData, useStore } from '../../store';
 import { Alert, Field, Switch } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
@@ -44,7 +44,7 @@ export function NumberingSection() {
 
   return (
     <div className="fstack">
-      <FormCard icon={<Hash size={16} />} title="Numéro de souche des matricules"
+      <FormCard icon={<IdCard size={16} />} title="Numéro de souche des matricules"
         subtitle="Chaque nouvel employé reçoit automatiquement le matricule suivant ; le compteur avance d’un à chaque création et saute un numéro déjà pris.">
         <div className="numbering">
           <div className="form-grid">
