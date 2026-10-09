@@ -14,12 +14,17 @@ const has = (list: { companyId: ID }[], companyId: ID) => list.some((x) => x.com
 /** Crée le paramétrage RH minimal d'une société si elle n'en a pas encore. */
 export function provisionRh(db: Database, companyId: ID): Database {
   let d = db;
+  if (!has(d.schedules, companyId)) {
+    d = { ...d, schedules: [...d.schedules, { id: id('s'), companyId, name: 'Standard bureau', workDays: [1, 2, 3, 4, 5],
+      slots: [{ label: 'Matin', start: '09:00', end: '12:30' }, { label: 'Après-midi', start: '14:00', end: '18:00' }] }] };
+  }
   if (!has(d.departments, companyId)) {
     const depId = id('d');
+    const scheduleId = d.schedules.find((x) => x.companyId === companyId && !x.archived)?.id;
     d = {
       ...d,
-      departments: [...d.departments, { id: depId, companyId, name: 'Direction générale', code: 'DG' }],
-      functions: [...d.functions, { id: id('f'), companyId, name: 'Administrateur RH', departmentId: depId, kind: 'solo' }],
+      departments: [...d.departments, { id: depId, companyId, name: 'Direction générale', code: 'DG', scheduleId }],
+      functions: [...d.functions, { id: id('f'), companyId, name: 'Administrateur RH', departmentId: depId, interim: false, kind: 'solo' }],
     };
   }
   if (!has(d.countries, companyId)) {
@@ -27,10 +32,6 @@ export function provisionRh(db: Database, companyId: ID): Database {
       { id: id('ctry'), companyId, name: 'Maroc', dialCode: '212', digits: 9 },
       { id: id('ctry'), companyId, name: 'France', dialCode: '33', digits: 9 },
     ] };
-  }
-  if (!has(d.schedules, companyId)) {
-    d = { ...d, schedules: [...d.schedules, { id: id('s'), companyId, name: 'Standard bureau', workDays: [1, 2, 3, 4, 5],
-      slots: [{ label: 'Matin', start: '09:00', end: '12:30' }, { label: 'Après-midi', start: '14:00', end: '18:00' }] }] };
   }
   if (!has(d.leaveTypes, companyId)) {
     const ltId = id('lt');
@@ -47,9 +48,10 @@ export function provisionRh(db: Database, companyId: ID): Database {
     ] };
   }
   if (!has(d.circuits, companyId)) {
+    // Un circuit par département (RH-22) : le premier département est dispensé, son administrateur valide seul.
+    const depId = d.departments.find((x) => x.companyId === companyId && !x.archived && !x.parentId)?.id;
     d = { ...d, circuits: [...d.circuits,
-      { id: id('ci'), companyId, name: 'Standard — manager direct', description: 'Validation par le responsable hiérarchique.', exempt: false, steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
-      { id: id('ci'), companyId, name: 'Dispensé d’approbation', description: 'Validation automatique à l’envoi.', exempt: true, steps: [] },
+      { id: id('ci'), companyId, name: 'Direction générale — dispensé', description: 'Validation automatique à l’envoi.', exempt: true, departmentId: depId, steps: [] },
     ] };
   }
   if (!d.presencePolicies.some((x) => x.companyId === companyId)) {
@@ -63,7 +65,6 @@ export function ensureAdminEmployee(db: Database, companyId: ID, userId: ID): Da
   const user = db.users.find((u) => u.id === userId);
   if (!user) return db;
   const adminRole = db.roles.find((r) => r.companyId === companyId && !r.archived && r.name.startsWith('Administrateur'));
-  const exempt = db.circuits.find((c) => c.companyId === companyId && !c.archived && c.exempt);
   let d = db;
   let employeeId = user.employeeLinks[companyId];
   if (!employeeId || !d.employees.some((e) => e.id === employeeId)) {
@@ -74,9 +75,8 @@ export function ensureAdminEmployee(db: Database, companyId: ID, userId: ID): Da
       employees: [...d.employees, employee],
       profiles: [...d.profiles, {
         employeeId, companyId,
-        scheduleId: d.schedules.find((s) => s.companyId === companyId && !s.archived)?.id ?? '',
-        roleId: adminRole?.id ?? '', extraPermissions: [], removedPermissions: [],
-        circuitId: exempt?.id ?? '', approverIds: [], carryOver: {},
+        scheduleId: '', roleId: adminRole?.id ?? '', extraPermissions: [], removedPermissions: [],
+        circuitId: '', approverIds: [], carryOver: {},
       }],
       users: d.users.map((u) => (u.id === userId ? { ...u, employeeLinks: { ...u.employeeLinks, [companyId]: employeeId! } } : u)),
     };
@@ -88,7 +88,7 @@ export function ensureAdminEmployee(db: Database, companyId: ID, userId: ID): Da
 }
 
 function employeeFromUser(d: Database, user: TenantUser, companyId: ID): Employee {
-  const dep = d.departments.find((x) => x.companyId === companyId && !x.archived);
+  const dep = d.departments.find((x) => x.companyId === companyId && !x.archived && !x.parentId);
   const fn = d.functions.find((x) => x.companyId === companyId && !x.archived && (!x.departmentId || x.departmentId === dep?.id));
   const count = d.employees.filter((e) => e.companyId === companyId).length;
   const company = d.companies.find((c) => c.id === companyId);
@@ -98,5 +98,7 @@ function employeeFromUser(d: Database, user: TenantUser, companyId: ID): Employe
     email: user.email, phone: '', birthDate: '', address: '',
     departmentId: dep?.id ?? '', functionId: fn?.id ?? '', hireDate: TODAY, contract: 'CDI', status: 'actif',
     account: { login: user.email.split('@')[0], active: true },
+    maritalStatus: 'celibataire', childrenCount: 0, scheduleMode: 'organisation', salaries: [], allowPrimes: false, primes: [],
+    history: [{ at: TODAY, kind: 'recrutement', label: 'Fiche créée à l’activation de l’application RH (administrateur)' }],
   };
 }

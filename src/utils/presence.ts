@@ -37,7 +37,8 @@ export function findPresenceConflicts(
   if (!types.has(leaveTypeId)) return [];
 
   const fn = db.functions.find((f) => f.id === employee.functionId);
-  if (!fn) return [];
+  // Sans règles d'intérim, la fonction n'impose aucune contrainte de présence.
+  if (!fn || !fn.interim) return [];
   const schedule = db.schedules.find((s) => s.id === db.profiles.find((p) => p.employeeId === employeeId)?.scheduleId);
   const workDays = schedule?.workDays ?? [1, 2, 3, 4, 5];
   const days = eachDay(start, end).filter((d) => workDays.includes(isoWeekday(d)));

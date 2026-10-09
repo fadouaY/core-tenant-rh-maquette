@@ -1,14 +1,16 @@
 // Autorisations d'absence en heures : décompte d'après les créneaux de l'horaire de l'employé.
 // Une journée de solde vaut la durée de travail d'une journée de son horaire (ex. 09:00–12:30 + 14:00–18:00 = 7 h 30).
 import type { Database, ID, ISODate, LeaveRequest, Schedule, TimeSlot } from '../types';
-import { isoWeekday } from './dates';
+import { TODAY } from './dates';
+import { isWorkingDay, scheduleOn } from './org';
 import { profileOf } from './leave';
 
 export const toMinutes = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
 
-export function scheduleOf(db: Database, employeeId: ID): Schedule | undefined {
-  const profile = profileOf(db, employeeId);
-  return db.schedules.find((s) => s.id === profile?.scheduleId);
+/** Horaire de l'employé à une date : hérité du rattachement ou planifié dans le tableau de chargement. */
+export function scheduleOf(db: Database, employeeId: ID, date: ISODate = TODAY): Schedule | undefined {
+  const employee = db.employees.find((e) => e.id === employeeId);
+  return employee ? scheduleOn(db, employee, date).schedule : undefined;
 }
 
 /** Durée de travail d'une journée (en heures) selon les créneaux de l'horaire. */
@@ -31,14 +33,15 @@ export interface AuthorizationCount {
 }
 
 export function countAuthorization(db: Database, employeeId: ID, date: ISODate, from: string, to: string): AuthorizationCount {
-  const schedule = scheduleOf(db, employeeId);
+  const schedule = scheduleOf(db, employeeId, date);
   const slots = schedule?.slots ?? [];
   const perDay = dayHours(schedule);
   const base: AuthorizationCount = { hours: 0, days: 0, dayHours: perDay, workingDay: false, outsideMinutes: 0, slots };
   if (!date || !from || !to || toMinutes(to) <= toMinutes(from)) return base;
   const companyId = profileOf(db, employeeId)?.companyId;
   const holiday = db.holidays.find((h) => h.companyId === companyId && !h.archived && h.date === date)?.name;
-  const workingDay = (schedule?.workDays ?? [1, 2, 3, 4, 5]).includes(isoWeekday(date)) && !holiday;
+  const employee = db.employees.find((e) => e.id === employeeId);
+  const workingDay = !!employee && isWorkingDay(db, employee, date) && !holiday;
   const a = toMinutes(from);
   const b = toMinutes(to);
   const inside = workingDay
@@ -97,13 +100,13 @@ export function slotTimes(slots: TimeSlot[], step = 15) {
 
 /** Prochain jour travaillé (non férié) à partir de « from », pour pré-remplir une autorisation. */
 export function nextWorkingDay(db: Database, employeeId: ID, from: ISODate): ISODate {
-  const schedule = scheduleOf(db, employeeId);
+  const employee = db.employees.find((e) => e.id === employeeId);
   const companyId = profileOf(db, employeeId)?.companyId;
   const holidays = new Set(db.holidays.filter((h) => h.companyId === companyId && !h.archived).map((h) => h.date));
   const d = new Date(`${from}T12:00:00`);
   for (let i = 0; i < 14; i++) {
     const iso = d.toISOString().slice(0, 10);
-    if ((schedule?.workDays ?? [1, 2, 3, 4, 5]).includes(isoWeekday(iso)) && !holidays.has(iso)) return iso;
+    if (employee && isWorkingDay(db, employee, iso) && !holidays.has(iso)) return iso;
     d.setDate(d.getDate() + 1);
   }
   return from;

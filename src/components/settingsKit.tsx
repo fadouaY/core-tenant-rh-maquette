@@ -12,7 +12,7 @@ export interface Column<T> {
 
 /** Tableau d'éléments archivables : les archivés restent consultables, grisés. */
 export function ArchivableTable<T extends { id: string; archived?: boolean }>({
-  title, description, rows, columns, collection, addLabel, onAdd, nameOf, rowActions, emptyText,
+  title, description, rows, columns, collection, addLabel, onAdd, nameOf, rowActions, emptyText, archiveBlockedBy, rowClassName,
 }: {
   title: string;
   description: string;
@@ -25,8 +25,16 @@ export function ArchivableTable<T extends { id: string; archived?: boolean }>({
   /** Actions supplémentaires par ligne (ex. Modifier). */
   rowActions?: (row: T) => ReactNode;
   emptyText?: string;
+  /** Motif empêchant l'archivage (élément encore utilisé) ; l'archivage est alors refusé avec ce message. */
+  archiveBlockedBy?: (row: T) => string | undefined;
+  rowClassName?: (row: T) => string;
 }) {
-  const { setArchived } = useStore();
+  const { setArchived, toast } = useStore();
+  const toggle = (r: T) => {
+    const blocked = !r.archived ? archiveBlockedBy?.(r) : undefined;
+    if (blocked) toast(blocked, 'danger');
+    else setArchived(collection, r.id, !r.archived);
+  };
   const [showArchived, setShowArchived] = useState(true);
   const archivedCount = rows.filter((r) => r.archived).length;
   const visible = rows.filter((r) => showArchived || !r.archived);
@@ -53,12 +61,12 @@ export function ArchivableTable<T extends { id: string; archived?: boolean }>({
             </thead>
             <tbody>
               {visible.map((r) => (
-                <tr key={r.id} className={r.archived ? 'row-archived' : ''}>
+                <tr key={r.id} className={`${r.archived ? 'row-archived' : ''} ${rowClassName?.(r) ?? ''}`}>
                   {columns.map((c) => <td key={c.header} className={c.className}>{c.render(r)}</td>)}
                   <td>{r.archived ? <ArchivedBadge /> : <span className="badge badge-success">Actif</span>}</td>
                   <td className="actions">
                     {rowActions?.(r)}
-                    <button type="button" className="btn btn-sm btn-ghost" onClick={() => setArchived(collection, r.id, !r.archived)}
+                    <button type="button" className="btn btn-sm btn-ghost" onClick={() => toggle(r)}
                       aria-label={`${r.archived ? 'Restaurer' : 'Archiver'} ${nameOf(r)}`}>
                       {r.archived ? <><ArchiveRestore size={14} aria-hidden /> Restaurer</> : <><Archive size={14} aria-hidden /> Archiver</>}
                     </button>

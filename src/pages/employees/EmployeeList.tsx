@@ -12,6 +12,7 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
   const [departmentId, setDepartmentId] = useState('');
   const [functionId, setFunctionId] = useState('');
   const [status, setStatus] = useState('');
+  const [mode, setMode] = useState('');
   const [editing, setEditing] = useState<Employee>();
 
   const list = useMemo(() => {
@@ -21,11 +22,12 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
       .filter((e) => !departmentId || e.departmentId === departmentId)
       .filter((e) => !functionId || e.functionId === functionId)
       .filter((e) => !status || e.status === status)
+      .filter((e) => !mode || (mode === 'non-planifie' ? e.scheduleMode === 'chargement' && !data.profile(e.id)?.scheduleId : e.scheduleMode === mode))
       .sort((a, b) => a.lastName.localeCompare(b.lastName, 'fr'));
-  }, [data, q, departmentId, functionId, status]);
+  }, [data, q, departmentId, functionId, status, mode]);
 
-  const hasFilters = q || departmentId || functionId || status;
-  const reset = () => { setQ(''); setDepartmentId(''); setFunctionId(''); setStatus(''); };
+  const hasFilters = q || departmentId || functionId || status || mode;
+  const reset = () => { setQ(''); setDepartmentId(''); setFunctionId(''); setStatus(''); setMode(''); };
   const absenceToday = (id: string) => data.requests.find((r) => r.employeeId === id && r.status === 'approuve' && r.start <= TODAY && r.end >= TODAY);
 
   return (
@@ -48,6 +50,8 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
         <SelectFilter label="Fonction" value={functionId} onChange={setFunctionId} allLabel="Toutes"
           options={data.functions.filter((f) => !departmentId || f.departmentId === departmentId).map((f) => ({ value: f.id, label: f.name + (f.archived ? ' (archivée)' : '') }))} />
         <SelectFilter label="Statut" value={status} onChange={setStatus} options={employeeStatusOptions} />
+        <SelectFilter label="Mode horaire" value={mode} onChange={setMode}
+          options={[{ value: 'organisation', label: 'Organisationnel' }, { value: 'chargement', label: 'Tableau de chargement' }, { value: 'non-planifie', label: 'Non planifié' }]} />
         {hasFilters && <button type="button" className="btn btn-sm btn-ghost filter-reset" onClick={reset}><RotateCcw size={13} aria-hidden /> Réinitialiser</button>}
       </div>
       <p className="result-count">{list.length} employé{list.length > 1 ? 's' : ''}</p>
@@ -62,6 +66,7 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
                 <th scope="col">Matricule</th>
                 <th scope="col">Département</th>
                 <th scope="col">Fonction</th>
+                <th scope="col">Horaire</th>
                 <th scope="col">Embauche</th>
                 <th scope="col">Statut</th>
                 <th scope="col">Présence</th>
@@ -75,8 +80,11 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
                   <tr key={e.id} className="row-click" onClick={() => navigate(`employes/${e.id}`)}>
                     <td><PersonCell employee={e} sub={e.email} link /></td>
                     <td className="mono">{e.matricule}</td>
-                    <td>{data.department(e.departmentId)?.name}</td>
+                    <td>{data.department(e.departmentId)?.name}{e.subDepartmentId && <span className="block small text-muted">{data.department(e.subDepartmentId)?.name}</span>}</td>
                     <td>{data.fn(e.functionId)?.name}</td>
+                    <td>{e.scheduleMode === 'organisation'
+                      ? <span className="small">{data.schedule(data.profile(e.id)?.scheduleId)?.name ?? '—'}</span>
+                      : data.profile(e.id)?.scheduleId ? <Badge tone="warning">Tableau de chargement</Badge> : <Badge tone="danger">Non planifié</Badge>}</td>
                     <td className="nowrap">{formatDate(e.hireDate)}</td>
                     <td><EmployeeStatusBadge status={e.status} /></td>
                     <td>{abs ? <Badge tone="warning">En congé jusqu’au {formatDayMonth(abs.end)}</Badge> : <span className="text-muted">—</span>}</td>

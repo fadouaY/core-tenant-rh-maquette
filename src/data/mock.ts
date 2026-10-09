@@ -2,9 +2,10 @@
 import type {
   AppAssignment, AppInfo, FunctionLink, PresencePolicy, TenantUser, UserAccess,
   ApprovalCircuit, ApprovalStep, Company, Database, Department, Employee, HistoryEntry, Holiday, HrEvent,
-  JobFunction, LeaveProfile, LeaveRequest, LeaveRule, LeaveType, Notification, Permission, Role, Schedule, Country,
+  JobFunction, LeaveProfile, LeaveRequest, LeaveRule, LeaveType, LoadingPeriod, Notification, DocumentType, EmployeeNumbering, Permission, Prime, Role, Schedule, Country,
 } from '../types';
-import { countLeaveDays } from '../utils/leave';
+import { countLeaveDays, deriveProfiles } from '../utils/leave';
+import { formatRange } from '../utils/dates';
 import { countAuthorization } from '../utils/hours';
 
 /** Permissions de l'application RH. */
@@ -69,39 +70,45 @@ const assignments: AppAssignment[] = [
   { appId: 'rh', companyId: 'c2', enabled: true, adminUserId: 'u4', activatedAt: '2024-06-10' },
 ];
 
+/** Départements et sous-départements (parentId), avec leur horaire organisationnel. */
 const departments: Department[] = [
-  { id: 'd1', companyId: 'c1', name: 'Direction générale', code: 'DG', headId: 'e2' },
-  { id: 'd2', companyId: 'c1', name: 'Ressources humaines', code: 'RH', headId: 'e1' },
-  { id: 'd3', companyId: 'c1', name: 'Finance & comptabilité', code: 'FIN', headId: 'e7' },
-  { id: 'd4', companyId: 'c1', name: 'Conseil & projets', code: 'CSL', headId: 'e3' },
-  { id: 'd5', companyId: 'c1', name: "Systèmes d'information", code: 'SI', headId: 'e9' },
-  { id: 'd6', companyId: 'c1', name: 'Commercial', code: 'COM', headId: 'e12' },
+  { id: 'd1', companyId: 'c1', name: 'Direction générale', code: 'DG', headId: 'e2', scheduleId: 's1' },
+  { id: 'd2', companyId: 'c1', name: 'Ressources humaines', code: 'RH', headId: 'e1', scheduleId: 's1' },
+  { id: 'd2a', companyId: 'c1', name: 'Paie & administration du personnel', code: 'PAIE', headId: 'e14', parentId: 'd2', scheduleId: 's2' },
+  { id: 'd3', companyId: 'c1', name: 'Finance & comptabilité', code: 'FIN', headId: 'e7', scheduleId: 's1' },
+  { id: 'd4', companyId: 'c1', name: 'Conseil & projets', code: 'CSL', headId: 'e3', scheduleId: 's1' },
+  { id: 'd4a', companyId: 'c1', name: 'Pôle transformation', code: 'TRF', headId: 'e4', parentId: 'd4' },
+  { id: 'd5', companyId: 'c1', name: "Systèmes d'information", code: 'SI', headId: 'e9', scheduleId: 's1' },
+  { id: 'd5a', companyId: 'c1', name: 'Infrastructure & support', code: 'INF', headId: 'e9', parentId: 'd5', scheduleId: 's3' },
+  { id: 'd5b', companyId: 'c1', name: 'Développement', code: 'DEV', parentId: 'd5' },
+  { id: 'd6', companyId: 'c1', name: 'Commercial', code: 'COM', headId: 'e12', scheduleId: 's1' },
   { id: 'd7', companyId: 'c1', name: 'Juridique (fusionné avec DG)', code: 'JUR', archived: true },
-  { id: 'hd1', companyId: 'c2', name: 'Administration', code: 'ADM', headId: 'h1' },
-  { id: 'hd2', companyId: 'c2', name: 'Exploitation', code: 'EXP', headId: 'h2' },
-  { id: 'hd3', companyId: 'c2', name: 'Service client', code: 'SAV', headId: 'h4' },
+  { id: 'hd1', companyId: 'c2', name: 'Administration', code: 'ADM', headId: 'h1', scheduleId: 'hs1' },
+  { id: 'hd2', companyId: 'c2', name: 'Exploitation', code: 'EXP', headId: 'h2', scheduleId: 'hs1' },
+  { id: 'hd2a', companyId: 'c2', name: 'Équipes postées', code: 'POS', headId: 'h2', parentId: 'hd2', scheduleId: 'hs2' },
+  { id: 'hd3', companyId: 'c2', name: 'Service client', code: 'SAV', headId: 'h4', scheduleId: 'hs1' },
 ];
 
 const functions: JobFunction[] = [
-  { id: 'f1', companyId: 'c1', name: 'Directeur général', departmentId: 'd1', kind: 'solo' },
-  { id: 'f2', companyId: 'c1', name: 'Responsable RH', departmentId: 'd2', kind: 'solo' },
-  { id: 'f3', companyId: 'c1', name: 'Chargé(e) RH', departmentId: 'd2', kind: 'solo' },
-  { id: 'f4', companyId: 'c1', name: 'Directeur administratif et financier', departmentId: 'd3', kind: 'solo' },
-  { id: 'f5', companyId: 'c1', name: 'Contrôleur de gestion', departmentId: 'd3', kind: 'solo' },
-  { id: 'f6', companyId: 'c1', name: 'Comptable', departmentId: 'd3', kind: 'solo' },
-  { id: 'f7', companyId: 'c1', name: 'Chef de projet', departmentId: 'd4', kind: 'solo' },
-  { id: 'f8', companyId: 'c1', name: 'Consultant senior', departmentId: 'd4', kind: 'solo' },
-  { id: 'f9', companyId: 'c1', name: 'Consultant junior', departmentId: 'd4', kind: 'groupe', minPresent: 1 },
-  { id: 'f10', companyId: 'c1', name: 'Responsable SI', departmentId: 'd5', kind: 'solo' },
-  { id: 'f11', companyId: 'c1', name: 'Développeur', departmentId: 'd5', kind: 'groupe' },
-  { id: 'f12', companyId: 'c1', name: 'Ingénieur systèmes', departmentId: 'd5', kind: 'groupe', minPresent: 2 },
-  { id: 'f13', companyId: 'c1', name: 'Responsable commercial', departmentId: 'd6', kind: 'solo' },
-  { id: 'f14', companyId: 'c1', name: "Chargé d'affaires", departmentId: 'd6', kind: 'groupe' },
-  { id: 'f15', companyId: 'c1', name: 'Assistant juridique', departmentId: 'd7', archived: true, kind: 'solo' },
-  { id: 'hf1', companyId: 'c2', name: 'Responsable administratif', departmentId: 'hd1', kind: 'solo' },
-  { id: 'hf2', companyId: 'c2', name: "Chef d'équipe", departmentId: 'hd2', kind: 'solo' },
-  { id: 'hf3', companyId: 'c2', name: 'Technicien', departmentId: 'hd2', kind: 'groupe' },
-  { id: 'hf4', companyId: 'c2', name: 'Conseiller client', departmentId: 'hd3', kind: 'groupe', minPresent: 1 },
+  { id: 'f1', companyId: 'c1', name: 'Directeur général', departmentId: 'd1', interim: false, kind: 'solo' },
+  { id: 'f2', companyId: 'c1', name: 'Responsable RH', departmentId: 'd2', interim: true, kind: 'solo' },
+  { id: 'f3', companyId: 'c1', name: 'Chargé(e) RH', departmentId: 'd2', interim: true, kind: 'solo' },
+  { id: 'f4', companyId: 'c1', name: 'Directeur administratif et financier', departmentId: 'd3', interim: true, kind: 'solo' },
+  { id: 'f5', companyId: 'c1', name: 'Contrôleur de gestion', departmentId: 'd3', interim: true, kind: 'solo' },
+  { id: 'f6', companyId: 'c1', name: 'Comptable', departmentId: 'd3', interim: false, kind: 'solo' },
+  { id: 'f7', companyId: 'c1', name: 'Chef de projet', departmentId: 'd4', interim: false, kind: 'solo' },
+  { id: 'f8', companyId: 'c1', name: 'Consultant senior', departmentId: 'd4', interim: false, kind: 'solo' },
+  { id: 'f9', companyId: 'c1', name: 'Consultant junior', departmentId: 'd4', interim: true, kind: 'groupe', minPresent: 1 },
+  { id: 'f10', companyId: 'c1', name: 'Responsable SI', departmentId: 'd5', interim: false, kind: 'solo' },
+  { id: 'f11', companyId: 'c1', name: 'Développeur', departmentId: 'd5', interim: false, kind: 'groupe' },
+  { id: 'f12', companyId: 'c1', name: 'Ingénieur systèmes', departmentId: 'd5', interim: true, kind: 'groupe', minPresent: 2 },
+  { id: 'f13', companyId: 'c1', name: 'Responsable commercial', departmentId: 'd6', interim: false, kind: 'solo' },
+  { id: 'f14', companyId: 'c1', name: "Chargé d'affaires", departmentId: 'd6', interim: false, kind: 'groupe' },
+  { id: 'f15', companyId: 'c1', name: 'Assistant juridique', departmentId: 'd7', archived: true, interim: false, kind: 'solo' },
+  { id: 'hf1', companyId: 'c2', name: 'Responsable administratif', departmentId: 'hd1', interim: false, kind: 'solo' },
+  { id: 'hf2', companyId: 'c2', name: "Chef d'équipe", departmentId: 'hd2', interim: false, kind: 'solo' },
+  { id: 'hf3', companyId: 'c2', name: 'Technicien', departmentId: 'hd2', interim: false, kind: 'groupe' },
+  { id: 'hf4', companyId: 'c2', name: 'Conseiller client', departmentId: 'hd3', interim: true, kind: 'groupe', minPresent: 1 },
 ];
 
 /** Fonctions solo liées (suppléance). */
@@ -117,17 +124,18 @@ const presencePolicies: PresencePolicy[] = [
 ];
 
 const schedules: Schedule[] = [
-  { id: 's1', companyId: 'c1', name: 'Standard bureau', workDays: [1, 2, 3, 4, 5], slots: [
+  { id: 's1', companyId: 'c1', name: 'Standard bureau', workDays: [1, 2, 3, 4, 5], startDate: '2026-01-01', endDate: '2026-12-31', weeklyHours: 37.5,
+    exceptionalOffDays: [{ id: 'x1', date: '2026-12-24', label: 'Fermeture des bureaux — veille de fin d’année' }], slots: [
     { label: 'Matin', start: '09:00', end: '12:30' }, { label: 'Après-midi', start: '14:00', end: '18:00' }] },
-  { id: 's2', companyId: 'c1', name: 'Journée continue', workDays: [1, 2, 3, 4, 5], slots: [
+  { id: 's2', companyId: 'c1', name: 'Journée continue', workDays: [1, 2, 3, 4, 5], startDate: '2026-01-01', endDate: '2026-12-31', weeklyHours: 40, slots: [
     { label: 'Journée', start: '08:30', end: '16:30' }] },
-  { id: 's3', companyId: 'c1', name: 'Support du lundi au samedi', workDays: [1, 2, 3, 4, 5, 6], slots: [
+  { id: 's3', companyId: 'c1', name: 'Support du lundi au samedi', workDays: [1, 2, 3, 4, 5, 6], startDate: '2026-01-01', endDate: '2026-12-31', weeklyHours: 42, slots: [
     { label: 'Matin', start: '08:00', end: '12:00' }, { label: 'Après-midi', start: '13:00', end: '16:00' }] },
   { id: 's4', companyId: 'c1', name: 'Horaire aménagé (période 2026)', workDays: [1, 2, 3, 4, 5], archived: true, slots: [
     { label: 'Journée', start: '09:00', end: '15:30' }] },
-  { id: 'hs1', companyId: 'c2', name: 'Horaire 35 h', workDays: [1, 2, 3, 4, 5], slots: [
+  { id: 'hs1', companyId: 'c2', name: 'Horaire 35 h', workDays: [1, 2, 3, 4, 5], startDate: '2026-01-01', endDate: '2026-12-31', weeklyHours: 35, slots: [
     { label: 'Matin', start: '09:00', end: '12:00' }, { label: 'Après-midi', start: '13:00', end: '17:00' }] },
-  { id: 'hs2', companyId: 'c2', name: 'Équipe en 2×8', workDays: [1, 2, 3, 4, 5, 6], slots: [
+  { id: 'hs2', companyId: 'c2', name: 'Équipe en 2×8', workDays: [1, 2, 3, 4, 5, 6], startDate: '2026-01-01', endDate: '2026-12-31', weeklyHours: 40, slots: [
     { label: 'Poste du matin', start: '06:00', end: '14:00' }, { label: "Poste d'après-midi", start: '14:00', end: '22:00' }] },
 ];
 
@@ -183,14 +191,19 @@ const roles: Role[] = [
   { id: 'hro2', companyId: 'c2', name: 'Salarié', description: 'Accès standard.', permissions: ['conges.demander', 'calendrier.equipe'] },
 ];
 
+/** Un circuit actif par département (RH-22) ; les sous-départements en héritent. */
 const circuits: ApprovalCircuit[] = [
-  { id: 'ci1', companyId: 'c1', name: 'Standard — manager direct', description: 'Une seule validation par le responsable hiérarchique.', exempt: false,
+  { id: 'ci1', companyId: 'c1', name: 'Ressources humaines — manager direct', description: 'Une seule validation par le responsable hiérarchique.', exempt: false, departmentId: 'd2',
     steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
-  { id: 'ci2', companyId: 'c1', name: 'Projets — 2 niveaux', description: 'Manager puis validation RH.', exempt: false,
+  { id: 'ci2', companyId: 'c1', name: 'Conseil & projets — 2 niveaux', description: 'Manager puis validation RH.', exempt: false, departmentId: 'd4',
     steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }, { kind: 'employee', employeeId: 'e1', label: 'Responsable RH' }] },
-  { id: 'ci3', companyId: 'c1', name: 'Finance — 3 niveaux', description: 'Manager, RH, puis Direction générale.', exempt: false,
+  { id: 'ci3', companyId: 'c1', name: 'Finance — 3 niveaux', description: 'Manager, RH, puis Direction générale.', exempt: false, departmentId: 'd3',
     steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }, { kind: 'employee', employeeId: 'e1', label: 'Responsable RH' }, { kind: 'employee', employeeId: 'e2', label: 'Directeur général' }] },
-  { id: 'ci4', companyId: 'c1', name: 'Longue absence — 5 niveaux', description: 'Circuit complet pour les absences supérieures à 15 jours (exemple).', exempt: false,
+  { id: 'ci7', companyId: 'c1', name: 'Systèmes d’information — 2 niveaux', description: 'Manager puis responsable du département.', exempt: false, departmentId: 'd5',
+    steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }, { kind: 'departmentHead', label: 'Responsable du département' }] },
+  { id: 'ci8', companyId: 'c1', name: 'Commercial — manager direct', description: 'Validation par le responsable hiérarchique.', exempt: false, departmentId: 'd6',
+    steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
+  { id: 'ci4', companyId: 'c1', name: 'Longue absence — 5 niveaux', description: 'Remplacé par les circuits par département.', exempt: false, archived: true,
     steps: [
       { kind: 'manager', label: 'Manager direct (N+1)' },
       { kind: 'departmentHead', label: 'Responsable du département' },
@@ -198,12 +211,67 @@ const circuits: ApprovalCircuit[] = [
       { kind: 'employee', employeeId: 'e1', label: 'Responsable RH' },
       { kind: 'employee', employeeId: 'e2', label: 'Directeur général' },
     ] },
-  { id: 'ci5', companyId: 'c1', name: "Dispensé d'approbation", description: 'Les demandes sont validées automatiquement à l’envoi.', exempt: true, steps: [] },
-  { id: 'ci6', companyId: 'c1', name: 'Ancien circuit commercial', description: 'Remplacé par « Standard ».', exempt: false, archived: true,
+  { id: 'ci5', companyId: 'c1', name: 'Direction générale — dispensé', description: 'Les demandes sont validées automatiquement à l’envoi.', exempt: true, departmentId: 'd1', steps: [] },
+  { id: 'ci6', companyId: 'c1', name: 'Ancien circuit commercial', description: 'Remplacé par « Commercial — manager direct ».', exempt: false, archived: true,
     steps: [{ kind: 'employee', employeeId: 'e12', label: 'Responsable commercial' }, { kind: 'employee', employeeId: 'e7', label: 'DAF' }] },
-  { id: 'hci1', companyId: 'c2', name: 'Standard', description: 'Validation par le responsable.', exempt: false, steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
-  { id: 'hci2', companyId: 'c2', name: "Dispensé d'approbation", description: 'Validation automatique.', exempt: true, steps: [] },
+  { id: 'hci1', companyId: 'c2', name: 'Exploitation — manager direct', description: 'Validation par le responsable.', exempt: false, departmentId: 'hd2', steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
+  { id: 'hci2', companyId: 'c2', name: 'Administration — dispensé', description: 'Validation automatique.', exempt: true, departmentId: 'hd1', steps: [] },
+  { id: 'hci3', companyId: 'c2', name: 'Service client — manager direct', description: 'Validation par le responsable.', exempt: false, departmentId: 'hd3', steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
 ];
+
+/** Catalogue des primes (RH-27). */
+const primes: Prime[] = [
+  { id: 'pr1', companyId: 'c1', name: 'Prime de transport', code: 'TRANS', amount: 300, type: 'fixe', periodicity: 'mensuelle' },
+  { id: 'pr2', companyId: 'c1', name: 'Prime de rendement', code: 'REND', amount: 1500, type: 'variable', periodicity: 'trimestrielle' },
+  { id: 'pr3', companyId: 'c1', name: 'Prime d’astreinte', code: 'ASTR', amount: 800, type: 'variable', periodicity: 'mensuelle' },
+  { id: 'pr4', companyId: 'c1', name: 'Prime de panier', code: 'PAN', amount: 200, type: 'fixe', periodicity: 'mensuelle' },
+  { id: 'pr5', companyId: 'c1', name: 'Prime exceptionnelle projet ERP', code: 'ERP', amount: 2000, type: 'exceptionnelle', periodicity: 'ponctuelle', archived: true },
+  { id: 'hpr1', companyId: 'c2', name: 'Prime de nuit', code: 'NUIT', amount: 120, type: 'variable', periodicity: 'mensuelle' },
+  { id: 'hpr2', companyId: 'c2', name: 'Indemnité de transport', code: 'TRANS', amount: 50, type: 'fixe', periodicity: 'mensuelle' },
+];
+
+/** Types de documents du dossier employé (RH-17). */
+const documentTypes: DocumentType[] = [
+  { id: 'dt1', companyId: 'c1', name: 'Carte d’identité nationale (CIN)', code: 'CIN', required: true, formats: ['pdf', 'jpg', 'png'] },
+  { id: 'dt2', companyId: 'c1', name: 'Contrat de travail signé', code: 'CONTRAT', required: true, formats: ['pdf'] },
+  { id: 'dt3', companyId: 'c1', name: 'Relevé d’identité bancaire (RIB)', code: 'RIB', required: true, formats: ['pdf', 'jpg', 'png'] },
+  { id: 'dt4', companyId: 'c1', name: 'Diplôme', code: 'DIPL', required: false, formats: ['pdf', 'jpg', 'png'] },
+  { id: 'dt5', companyId: 'c1', name: 'Attestation médicale d’aptitude', code: 'MED', required: false, formats: ['pdf'] },
+  { id: 'dt6', companyId: 'c1', name: 'Fiche de renseignements (ancien modèle)', code: 'FRA', required: false, formats: ['docx'], archived: true },
+  { id: 'hdt1', companyId: 'c2', name: 'Pièce d’identité', code: 'ID', required: true, formats: ['pdf', 'jpg', 'png'] },
+  { id: 'hdt2', companyId: 'c2', name: 'Contrat de travail signé', code: 'CONTRAT', required: true, formats: ['pdf'] },
+];
+
+/** Numérotation des matricules (numéro de souche), poursuivie après les fiches existantes. */
+const numberings: EmployeeNumbering[] = [
+  { companyId: 'c1', prefix: 'ATC', separator: '-', withYear: false, digits: 5, next: 1120 },
+  { companyId: 'c2', prefix: 'HZS', separator: '-', withYear: false, digits: 5, next: 1036 },
+];
+
+/** Tableau de chargement (RH-25, RH-26) : périodes planifiées, sans chevauchement. */
+const loadingPeriods: LoadingPeriod[] = [
+  { id: 'lp1', companyId: 'c1', employeeId: 'e10', scheduleId: 's3', start: '2026-09-01', end: '2026-09-30', label: 'Astreinte support — septembre', reason: 'Rotation mensuelle du support.' },
+  { id: 'lp2', companyId: 'c1', employeeId: 'e10', scheduleId: 's2', start: '2026-10-12', end: '2026-10-31', label: 'Bascule ERP', reason: 'Mise en production du nouvel ERP.' },
+  { id: 'lp3', companyId: 'c1', employeeId: 'e17', scheduleId: 's3', start: '2026-10-05', end: '2026-10-25', label: 'Intégration — équipe support', reason: 'Prise de poste.' },
+  { id: 'hlp1', companyId: 'c2', employeeId: 'h3', scheduleId: 'hs2', start: '2026-09-21', end: '2026-10-04', label: 'Rotation semaine A', reason: 'Planning des équipes postées.' },
+  { id: 'hlp2', companyId: 'c2', employeeId: 'h3', scheduleId: 'hs1', start: '2026-10-05', end: '2026-10-18', label: 'Retour en horaire de jour', reason: 'Formation interne.' },
+];
+
+/** Compléments des fiches : état civil, rattachement fin, mode horaire, rémunération. */
+const employeeExtras: Record<string, Partial<Employee>> = {
+  e1: { maritalStatus: 'marie', childrenCount: 2, allowPrimes: true, primes: [{ primeId: 'pr1', since: '2018-03-12' }, { primeId: 'pr2', since: '2024-01-01' }] },
+  e2: { maritalStatus: 'marie', childrenCount: 3, allowPrimes: true, primes: [{ primeId: 'pr2', since: '2012-09-01' }] },
+  e4: { subDepartmentId: 'd4a' },
+  e9: { allowPrimes: true, primes: [{ primeId: 'pr3', since: '2023-01-01' }] },
+  e10: { scheduleMode: 'chargement', loadingSince: '2026-09-01', allowPrimes: true, primes: [{ primeId: 'pr3', since: '2026-09-01' }] },
+  e11: { subDepartmentId: 'd5a' },
+  e14: { subDepartmentId: 'd2a' },
+  e15: { contractEnd: '2025-03-03' },
+  e16: { contractEnd: '2027-02-26' },
+  e17: { scheduleMode: 'chargement', loadingSince: '2026-10-05', subDepartmentId: 'd5a', contractEnd: '2027-04-04' },
+  h2: { subDepartmentId: 'hd2a' },
+  h3: { subDepartmentId: 'hd2a', scheduleMode: 'chargement', loadingSince: '2026-09-21', allowPrimes: true, primes: [{ primeId: 'hpr1', since: '2026-09-21' }] },
+};
 
 type EmpSeed = [
   id: string, first: string, last: string, dep: string, fn: string, hire: string, roleId: string,
@@ -232,8 +300,26 @@ function makeEmployees(companyId: string, prefix: string, domain: string, seeds:
       departmentId: dep, functionId: fn, hireDate: hire,
       contract: contract ?? 'CDI', status: status ?? 'actif', managerId,
       account: { login, active: status !== 'inactif', lastLogin: status === 'inactif' ? undefined : `2026-09-${String(20 + (i % 10)).padStart(2, '0')}T0${8 + (i % 2)}:1${i % 6}` },
+      maritalStatus: (['celibataire', 'marie', 'divorce'] as const)[i % 3], childrenCount: i % 3 === 1 ? (i % 4) + 1 : 0,
+      scheduleMode: 'organisation', allowPrimes: false, primes: [],
+      salaries: [{ id: `sal-${id}`, since: hire, reason: 'Salaire d’embauche', amount: companyId === 'c1' ? 8000 + ((i * 1370) % 14000) : 2100 + i * 240 }],
+      ...employeeExtras[id],
+      history: employeeHistory(id, hire, companyId),
     };
   });
+}
+
+/** Historique de départ : recrutement, puis bascule au tableau de chargement le cas échéant. */
+function employeeHistory(id: string, hire: string, companyId: string): Employee['history'] {
+  const x = employeeExtras[id] ?? {};
+  const list: Employee['history'] = [{ at: hire, kind: 'recrutement', label: 'Création du dossier (horaire organisationnel)' }];
+  if (x.primes?.length) list.push({ at: x.primes[0].since, kind: 'primes', label: `Autorisation des primes et attribution de ${x.primes.length} prime(s)` });
+  if (x.scheduleMode === 'chargement' && x.loadingSince) {
+    list.push({ at: x.loadingSince, kind: 'horaire', label: 'Passage au tableau de chargement : fin de l’horaire hérité du département' });
+    loadingPeriods.filter((p) => p.employeeId === id && p.companyId === companyId)
+      .forEach((p) => list.push({ at: p.start, kind: 'planification', label: `Période planifiée « ${p.label} » ${formatRange(p.start, p.end)}` }));
+  }
+  return list.sort((a, b) => b.at.localeCompare(a.at));
 }
 
 const employees: Employee[] = [
@@ -362,7 +448,7 @@ function buildDatabase(): Database {
   const base: Database = {
     tenant: { name: 'Groupe Atlas', ownerUserId: 'u1', plan: 'Offre Business', maxCompanies: 5, maxUsers: 10 }, apps: APPS, assignments, users, accesses,
     companies, departments, functions, functionLinks, presencePolicies, employees, profiles, schedules, leaveTypes, leaveRules, holidays, countries, roles, circuits,
-    requests: [], events, notifications,
+    primes, documentTypes, numberings, loadingPeriods, requests: [], events, notifications,
   };
   base.requests = requestSeeds.map((r) => {
     const startPart = r.startPart ?? 'full';
@@ -376,5 +462,5 @@ function buildDatabase(): Database {
   return base;
 }
 
-export const initialDatabase = buildDatabase();
+export const initialDatabase = deriveProfiles(buildDatabase());
 

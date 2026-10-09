@@ -1,4 +1,4 @@
-import { Briefcase, Building2, CalendarOff, Clock, GitBranch, Globe, ListChecks, Palmtree, Settings, ShieldCheck } from 'lucide-react';
+import { BadgePercent, Briefcase, Building2, FileText, Hash, CalendarOff, Clock, GitBranch, Globe, ListChecks, Palmtree, Settings, ShieldCheck } from 'lucide-react';
 import { useCompanyData } from '../../store';
 import { PageHeader } from '../../components/ui';
 import { CircuitsSection } from './CircuitsSection';
@@ -8,12 +8,18 @@ import { RulesAndPresence } from './PresenceRules';
 import { LeaveTypesSection } from './LeaveTypesSection';
 import { RolesSection } from './RolesSection';
 import { CountriesSection } from './CountriesSection';
+import { PrimesSection } from './PrimesSection';
+import { DocumentTypesSection } from './DocumentTypesSection';
+import { NumberingSection } from './NumberingSection';
 
 /** Sous-sections des paramètres (affichées dans la sous-navigation du shell). */
 export const SETTINGS_SECTIONS = [
   { id: 'departements', group: 'Organisation', label: 'Départements', icon: Building2, Component: DepartmentsSection },
   { id: 'fonctions', group: 'Organisation', label: 'Fonctions', icon: Briefcase, Component: FunctionsSection },
+  { id: 'numerotation', group: 'Organisation', label: 'Numérotation des employés', icon: Hash, Component: NumberingSection },
   { id: 'pays', group: 'Organisation', label: 'Pays et téléphone', icon: Globe, Component: CountriesSection },
+  { id: 'primes', group: 'Organisation', label: 'Catalogue des primes', icon: BadgePercent, Component: PrimesSection },
+  { id: 'types-document', group: 'Organisation', label: 'Types de documents', icon: FileText, Component: DocumentTypesSection },
   { id: 'horaires', group: 'Temps et congés', label: 'Horaires et créneaux', icon: Clock, Component: SchedulesSection },
   { id: 'types-conge', group: 'Temps et congés', label: 'Types de congé', icon: Palmtree, Component: LeaveTypesSection },
   { id: 'regles', group: 'Temps et congés', label: 'Règles et quotas', icon: ListChecks, Component: RulesAndPresence },

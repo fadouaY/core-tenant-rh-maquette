@@ -32,12 +32,21 @@ export interface Person {
 
 // ===================== Organisation et employés =====================
 
+/**
+ * Département ou sous-département (RH-14) : un sous-département porte `parentId`.
+ * Le circuit d'approbation est porté par le circuit (`ApprovalCircuit.departmentId`), un seul par département ;
+ * un sous-département hérite du circuit de son département.
+ */
 export interface Department extends Archivable {
   id: ID;
   companyId: ID;
   name: string;
   code: string;
   headId?: ID;
+  /** Département parent : présent uniquement pour un sous-département. */
+  parentId?: ID;
+  /** Horaire organisationnel (RH-21) ; un sous-département sans horaire hérite de celui de son département. */
+  scheduleId?: ID;
 }
 
 export type FunctionKind = 'solo' | 'groupe';
@@ -47,6 +56,11 @@ export interface JobFunction extends Archivable {
   companyId: ID;
   name: string;
   departmentId?: ID;
+  /**
+   * Règles d'intérim appliquées à la fonction (RH-15). Sans intérim, aucune règle de présence ne s'applique et
+   * `kind` / `minPresent` sont ignorés.
+   */
+  interim: boolean;
   /** solo : une seule personne occupe la fonction ; groupe : plusieurs personnes. */
   kind: FunctionKind;
   /** Fonction groupe : nombre minimum de personnes présentes sur une même période. */
@@ -71,6 +85,39 @@ export interface PresencePolicy {
 
 export type EmployeeStatus = 'actif' | 'essai' | 'inactif';
 
+export type MaritalStatus = 'celibataire' | 'marie' | 'divorce';
+
+/**
+ * Mode horaire (RH-6, RH-24) : « organisation » = horaire hérité du (sous-)département ;
+ * « chargement » = horaire planifié par périodes dans le tableau de chargement, sans retour automatique.
+ */
+export type ScheduleMode = 'organisation' | 'chargement';
+
+/** Salaire de base daté (RH-8) : le salaire en vigueur est le plus récent dont la date d'effet est passée. */
+export interface Salary {
+  id: ID;
+  amount: number;
+  since: ISODate;
+  reason: string;
+}
+
+/** Prime du catalogue attribuée à un employé (RH-8). */
+export interface EmployeePrime {
+  primeId: ID;
+  since: ISODate;
+}
+
+export type EmployeeHistoryKind =
+  | 'recrutement' | 'information' | 'mutation' | 'horaire' | 'planification' | 'primes' | 'salaire' | 'statut' | 'circuit';
+
+/** Entrée de l'historique de l'employé (RH-10) : ajoutée par l'application, jamais modifiée. */
+export interface EmployeeHistoryEntry {
+  at: ISODate;
+  kind: EmployeeHistoryKind;
+  label: string;
+  actorId?: ID;
+}
+
 export interface Employee extends Person {
   companyId: ID;
   matricule: string;
@@ -81,12 +128,26 @@ export interface Employee extends Person {
   birthDate: ISODate;
   address: string;
   departmentId: ID;
+  /** Sous-département facultatif, enfant de `departmentId`. */
+  subDepartmentId?: ID;
   functionId: ID;
   hireDate: ISODate;
   contract: 'CDI' | 'CDD' | 'Stage';
+  /** Fin du contrat (CDD, stage) ; absente pour un CDI. */
+  contractEnd?: ISODate;
   status: EmployeeStatus;
   managerId?: ID;
   account: { login: string; active: boolean; lastLogin?: string };
+  maritalStatus: MaritalStatus;
+  childrenCount: number;
+  scheduleMode: ScheduleMode;
+  /** Date d'effet du passage au tableau de chargement (mode « chargement »). */
+  loadingSince?: ISODate;
+  salaries: Salary[];
+  /** Autorisation des primes, décochée par défaut ; la retirer révoque les primes actives. */
+  allowPrimes: boolean;
+  primes: EmployeePrime[];
+  history: EmployeeHistoryEntry[];
 }
 
 // ===================== Congés =====================
@@ -115,9 +176,26 @@ export interface Schedule extends Archivable {
   id: ID;
   companyId: ID;
   name: string;
-  /** Jours travaillés : 1 = lundi … 7 = dimanche. */
+  /** Jours travaillés par défaut : 1 = lundi … 7 = dimanche (tableau de chargement, départements sans réglage propre). */
   workDays: number[];
   slots: TimeSlot[];
+  /** Période d'application du scénario (RH-21). */
+  startDate?: ISODate;
+  endDate?: ISODate;
+  /** Volume horaire hebdomadaire déclaré. */
+  weeklyHours?: number;
+  /** Jours travaillés propres à un département ou sous-département concerné. */
+  departmentWorkDays?: Record<ID, number[]>;
+  /** Jours non travaillés exceptionnels, distincts des jours fériés (RH-20). */
+  exceptionalOffDays?: ExceptionalOffDay[];
+}
+
+export interface ExceptionalOffDay {
+  id: ID;
+  date: ISODate;
+  label: string;
+  /** Département concerné ; absent = tous les départements du scénario. */
+  departmentId?: ID;
 }
 
 export interface LeaveType extends Archivable {
@@ -192,6 +270,10 @@ export interface CircuitStep {
   label: string;
 }
 
+/**
+ * Circuit d'approbation (RH-22) : affecté à un seul département, et un département n'a qu'un circuit actif.
+ * Ses sous-départements en héritent ; il s'applique automatiquement aux employés (RH-23).
+ */
 export interface ApprovalCircuit extends Archivable {
   id: ID;
   companyId: ID;
@@ -199,18 +281,80 @@ export interface ApprovalCircuit extends Archivable {
   description: string;
   exempt: boolean;
   steps: CircuitStep[];
+  departmentId?: ID;
 }
 
-/** Paramétrage congé et accès d'un employé. */
+/** Prime du catalogue de la société (RH-27). Archivée = désactivée : plus attribuable, attributions conservées. */
+export interface Prime extends Archivable {
+  id: ID;
+  companyId: ID;
+  name: string;
+  code: string;
+  amount: number;
+  type: 'fixe' | 'variable' | 'exceptionnelle';
+  /** Fréquence de versement ; « ponctuelle » = versée une seule fois. */
+  periodicity: PrimePeriodicity;
+}
+
+export type PrimePeriodicity = 'mensuelle' | 'trimestrielle' | 'semestrielle' | 'annuelle' | 'ponctuelle';
+
+/**
+ * Type de document du dossier employé (RH-17). Nom et code uniques dans la société ; « obligatoire » = attendu
+ * dans chaque dossier. Archivé = inactif : plus proposé au classement, documents existants conservés.
+ */
+export interface DocumentType extends Archivable {
+  id: ID;
+  companyId: ID;
+  name: string;
+  code: string;
+  required: boolean;
+  /** Formats acceptés au dépôt (extensions en minuscules). */
+  formats: DocumentFormat[];
+}
+
+export type DocumentFormat = 'pdf' | 'jpg' | 'png' | 'docx';
+
+/**
+ * Numérotation des employés d'une société (numéro de souche) : le matricule est attribué automatiquement et dans
+ * l'ordre à la création — préfixe, année éventuelle et compteur sur un nombre fixe de chiffres.
+ */
+export interface EmployeeNumbering {
+  companyId: ID;
+  prefix: string;
+  separator: '-' | '/' | '';
+  withYear: boolean;
+  digits: number;
+  /** Prochain numéro attribué. */
+  next: number;
+}
+
+/** Période du tableau de chargement (RH-25, RH-26) : un horaire actif sur un intervalle, sans chevauchement. */
+export interface LoadingPeriod {
+  id: ID;
+  companyId: ID;
+  employeeId: ID;
+  scheduleId: ID;
+  start: ISODate;
+  end: ISODate;
+  label: string;
+  reason: string;
+}
+
+/**
+ * Paramétrage congé et accès d'un employé. `scheduleId`, `circuitId` et `approverIds` sont dérivés
+ * (voir utils/org.ts) : ils ne se saisissent pas, ils suivent le rattachement et le mode horaire.
+ */
 export interface LeaveProfile {
   employeeId: ID;
   companyId: ID;
+  /** Horaire en vigueur aujourd'hui ('' si l'employé n'est pas planifié dans le tableau de chargement). */
   scheduleId: ID;
   roleId: ID;
   extraPermissions: string[];
   removedPermissions: string[];
+  /** Circuit du département ('' si le département n'en a pas). */
   circuitId: ID;
-  /** Approbateurs résolus, dans l'ordre (vide si dispensé). */
+  /** Approbateurs résolus, dans l'ordre (vide si dispensé ou si l'employé est le dernier approbateur). */
   approverIds: ID[];
   /** Report de l'année précédente, par type de congé. */
   carryOver: Record<ID, number>;
@@ -350,6 +494,10 @@ export interface Database {
   countries: Country[];
   roles: Role[];
   circuits: ApprovalCircuit[];
+  primes: Prime[];
+  documentTypes: DocumentType[];
+  numberings: EmployeeNumbering[];
+  loadingPeriods: LoadingPeriod[];
   requests: LeaveRequest[];
   events: HrEvent[];
   notifications: Notification[];

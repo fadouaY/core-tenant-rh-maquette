@@ -2,7 +2,7 @@
 // Deux modes : « core » (console du tenant) et « rh » (Application RH).
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
-  AppWindow, Bell, Building2, CalendarCheck, CalendarDays, CalendarRange, Check, ChevronDown, ClipboardList, Grip, LayoutGrid, Menu,
+  AppWindow, Bell, Building2, CalendarCheck, CalendarClock, CalendarDays, CalendarRange, Check, ChevronDown, ClipboardList, Grip, LayoutGrid, Menu,
   LogOut, Scale, Search, Settings, UserRound, Users, X, type LucideIcon,
 } from 'lucide-react';
 import { navigate, useStore } from '../store';
@@ -26,6 +26,7 @@ const RAIL: Record<ShellMode, NavItem[]> = {
     { id: 'employes', label: 'Employés', icon: Users },
     { id: 'conges', label: 'Congés', icon: CalendarCheck },
     { id: 'calendrier', label: 'Calendrier', icon: CalendarDays },
+    { id: 'chargement', label: 'Tableau de chargement', short: 'Chargement', icon: CalendarClock },
     { id: 'evenements', label: 'Événements', icon: CalendarRange },
     { id: 'parametres', label: 'Paramètres', icon: Settings },
   ],

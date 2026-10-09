@@ -103,7 +103,7 @@ function LinkModal({ state, onClose }: { state?: { link?: FunctionLink }; onClos
   useEffect(() => { if (state) { setName(link?.name ?? ''); setIds(link?.functionIds ?? []); setSubmitted(false); } }, [state, link]);
   if (!state) return null;
 
-  const solos = data.functions.filter((f) => f.kind === 'solo' && !f.archived);
+  const solos = data.functions.filter((f) => f.interim && f.kind === 'solo' && !f.archived);
   const errors = { name: name.trim() ? '' : 'Nom requis.', ids: ids.length >= 2 ? '' : 'Sélectionnez au moins deux fonctions solo.' };
   const save = () => {
     setSubmitted(true);
@@ -145,7 +145,7 @@ function LinkModal({ state, onClose }: { state?: { link?: FunctionLink }; onClos
 function GroupMinimumsCard() {
   const { db, updateItem } = useStore();
   const data = useCompanyData();
-  const groups = data.functions.filter((f) => f.kind === 'groupe' && !f.archived);
+  const groups = data.functions.filter((f) => f.interim && f.kind === 'groupe' && !f.archived);
 
   const setMin = (f: JobFunction, value: string) => {
     updateItem('functions', { ...f, minPresent: value === '' ? undefined : Math.max(0, Number(value)) });

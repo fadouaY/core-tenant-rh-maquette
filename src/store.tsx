@@ -3,14 +3,16 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { initialDatabase } from './data/mock';
 import { ensureAdminEmployee, provisionRh } from './core/provisioning';
 import type {
-  AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, HrEvent, ID, LeaveProfile, LeaveRequest, Role, TenantUser,
+  AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, EmployeeHistoryEntry, EmployeeNumbering, HrEvent, ID, ISODate,
+  LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, TenantUser,
 } from './types';
-import { nowStamp } from './utils/dates';
-import { countLeaveDays, toPersonView } from './utils/leave';
+import { formatDate, formatRange, nowStamp } from './utils/dates';
+import { countLeaveDays, deriveProfiles, toPersonView } from './utils/leave';
+import { circuitForDepartment, currencyOf, formatMoney, historyEntry, MARITAL_LABEL, nextMatricule, numberingOf, organisationalSchedule, rootDepartment, scheduleOn } from './utils/org';
 import { countAuthorization } from './utils/hours';
 
 export type CollectionKey =
-  | 'departments' | 'functions' | 'functionLinks' | 'schedules' | 'leaveTypes' | 'leaveRules' | 'holidays' | 'countries' | 'roles' | 'circuits' | 'events';
+  | 'departments' | 'functions' | 'functionLinks' | 'schedules' | 'leaveTypes' | 'leaveRules' | 'holidays' | 'countries' | 'roles' | 'circuits' | 'events' | 'primes' | 'documentTypes';
 
 export interface Toast {
   id: number;
@@ -61,14 +63,31 @@ interface StoreValue {
   toasts: Toast[];
   toast: (message: string, tone?: Toast['tone']) => void;
   dismissToast: (id: number) => void;
+  /** Enregistre la fiche ; les changements d'état civil, de rattachement et de statut sont historisés (RH-5, RH-6, RH-10). */
   saveEmployee: (employee: Employee, profile: LeaveProfile) => void;
   saveProfile: (profile: LeaveProfile) => void;
+  /** Bascule au tableau de chargement ou retour à l'horaire organisationnel, à une date d'effet (RH-24). */
+  setScheduleMode: (employeeId: ID, mode: ScheduleMode, effectiveDate: ISODate, reason: string) => void;
+  /** Ajoute ou modifie une période du tableau de chargement (RH-26) ; le contrôle de chevauchement est fait avant. */
+  savePeriod: (period: LoadingPeriod) => void;
+  cancelPeriod: (periodId: ID) => void;
+  addSalary: (employeeId: ID, salary: Salary) => void;
+  /** Retirer l'autorisation révoque toutes les primes actives (RH-8). */
+  setPrimesAllowed: (employeeId: ID, allowed: boolean) => void;
+  assignPrime: (employeeId: ID, primeId: ID, since: ISODate) => void;
+  removePrime: (employeeId: ID, primeId: ID) => void;
+  /** Supprime un élément jamais utilisé (ex. prime jamais attribuée). */
+  removeItem: (key: CollectionKey, id: ID) => void;
+  /** Crée ou modifie un circuit ; s'il prend un département qui en avait déjà un, l'ancien est archivé (un circuit par département, RH-22). */
+  saveCircuit: (circuit: ApprovalCircuit) => void;
+  saveNumbering: (numbering: EmployeeNumbering) => void;
+  /** Enregistre un scénario d'horaire et l'affecte aux (sous-)départements choisis ; ceux qui en sont retirés le perdent (RH-21). */
+  saveSchedule: (schedule: Schedule, departmentIds: ID[]) => void;
   submitLeave: (input: NewLeaveInput) => LeaveRequest;
   decide: (requestId: ID, decision: 'approve' | 'refuse', comment: string) => void;
   cancelLeave: (requestId: ID, reason: string) => void;
   addEvent: (event: HrEvent) => void;
   updateRole: (role: Role) => void;
-  updateCircuit: (circuit: ApprovalCircuit) => void;
   setArchived: (key: CollectionKey, id: ID, archived: boolean) => void;
   addItem: <K extends CollectionKey>(key: K, item: Database[K][number]) => void;
   updateItem: <K extends CollectionKey>(key: K, item: Database[K][number]) => void;
@@ -84,11 +103,14 @@ let idCounter = 100;
 const PLACEHOLDER_USER: Employee = {
   id: '', companyId: '', firstName: '?', lastName: '?', matricule: '', email: '', phone: '', birthDate: '', address: '',
   departmentId: '', functionId: '', hireDate: '', contract: 'CDI', status: 'actif', account: { login: '', active: false },
+  maritalStatus: 'celibataire', childrenCount: 0, scheduleMode: 'organisation', salaries: [], allowPrimes: false, primes: [], history: [],
 };
 export const newId = (prefix: string) => `${prefix}${++idCounter}`;
 
 export function StoreProvider({ children }: { children: ReactNode }) {
-  const [db, setDb] = useState<Database>(initialDatabase);
+  const [db, setRawDb] = useState<Database>(initialDatabase);
+  // Toute modification recalcule les champs dérivés des profils (horaire en vigueur, circuit, approbateurs).
+  const setDb = useCallback((fn: (d: Database) => Database) => setRawDb((d) => deriveProfiles(fn(d))), []);
   const [companyId, setCompanyId] = useState<ID>('c1');
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [sessionUserId, setSessionUserId] = useState<ID | undefined>(() => {
@@ -188,13 +210,118 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     saveEmployee(employee, profile) {
       setDb((d) => {
-        const exists = d.employees.some((e) => e.id === employee.id);
+        const before = d.employees.find((e) => e.id === employee.id);
+        const saved = { ...employee, history: [...changesOf(d, before, employee, currentUser.id), ...employee.history] };
         const hasProfile = d.profiles.some((p) => p.employeeId === employee.id);
+        // Matricule attribué par la numérotation : le compteur passe au numéro suivant.
+        const auto = !before ? nextMatricule(d, employee.companyId, employee.hireDate) : undefined;
+        const numbering = auto && auto.matricule === employee.matricule ? { ...numberingOf(d, employee.companyId), next: auto.value + 1 } : undefined;
         return {
           ...d,
-          employees: exists ? d.employees.map((e) => (e.id === employee.id ? employee : e)) : [...d.employees, employee],
+          numberings: numbering ? [...d.numberings.filter((n) => n.companyId !== numbering.companyId), numbering] : d.numberings,
+          employees: before ? d.employees.map((e) => (e.id === employee.id ? saved : e)) : [...d.employees, saved],
           profiles: hasProfile ? d.profiles.map((p) => (p.employeeId === employee.id ? profile : p)) : [...d.profiles, profile],
         };
+      });
+    },
+
+    setScheduleMode(employeeId, mode, effectiveDate, reason) {
+      setDb((d) => mapEmployee(d, employeeId, (e) => {
+        const motif = reason.trim() ? ` — motif : ${reason.trim()}` : '';
+        const label = mode === 'chargement'
+          ? `Passage au tableau de chargement à compter du ${formatDate(effectiveDate)} : fin de l’horaire hérité du département${motif}`
+          : `Retour à l’horaire organisationnel à compter du ${formatDate(effectiveDate)} (${organisationalSchedule(d, e.departmentId, e.subDepartmentId).source})${motif}`;
+        return {
+          ...e, scheduleMode: mode, loadingSince: mode === 'chargement' ? effectiveDate : undefined,
+          history: [historyEntry('horaire', label, currentUser.id, effectiveDate), ...e.history],
+        };
+      }));
+    },
+
+    savePeriod(period) {
+      setDb((d) => {
+        const exists = d.loadingPeriods.some((p) => p.id === period.id);
+        const schedule = d.schedules.find((s) => s.id === period.scheduleId)?.name;
+        const label = `${exists ? 'Période modifiée' : 'Période planifiée'} « ${period.label} » ${formatRange(period.start, period.end)} (${schedule})`;
+        return mapEmployee({
+          ...d,
+          loadingPeriods: exists ? d.loadingPeriods.map((p) => (p.id === period.id ? period : p)) : [...d.loadingPeriods, period],
+        }, period.employeeId, (e) => ({ ...e, history: [historyEntry('planification', label, currentUser.id), ...e.history] }));
+      });
+    },
+
+    cancelPeriod(periodId) {
+      setDb((d) => {
+        const period = d.loadingPeriods.find((p) => p.id === periodId);
+        if (!period) return d;
+        return mapEmployee({ ...d, loadingPeriods: d.loadingPeriods.filter((p) => p.id !== periodId) }, period.employeeId, (e) => ({
+          ...e, history: [historyEntry('planification', `Période annulée « ${period.label} » (${formatRange(period.start, period.end)})`, currentUser.id), ...e.history],
+        }));
+      });
+    },
+
+    addSalary(employeeId, salary) {
+      setDb((d) => {
+        const currency = currencyOf(d.companies.find((c) => c.id === d.employees.find((e) => e.id === employeeId)?.companyId));
+        return mapEmployee(d, employeeId, (e) => ({
+          ...e, salaries: [...e.salaries, salary],
+          history: [historyEntry('salaire', `Salaire de base ${formatMoney(salary.amount, currency)} à compter du ${formatDate(salary.since)} — ${salary.reason}`, currentUser.id, salary.since), ...e.history],
+        }));
+      });
+    },
+
+    setPrimesAllowed(employeeId, allowed) {
+      setDb((d) => mapEmployee(d, employeeId, (e) => ({
+        ...e, allowPrimes: allowed, primes: allowed ? e.primes : [],
+        history: [historyEntry('primes', allowed
+          ? 'Autorisation des primes activée'
+          : `Autorisation des primes retirée${e.primes.length ? ` : ${e.primes.length} prime(s) révoquée(s)` : ''}`, currentUser.id), ...e.history],
+      })));
+    },
+
+    assignPrime(employeeId, primeId, since) {
+      setDb((d) => {
+        const prime = d.primes.find((p) => p.id === primeId);
+        return mapEmployee(d, employeeId, (e) => (!e.allowPrimes || !prime || prime.archived || e.primes.some((p) => p.primeId === primeId) ? e : {
+          ...e, primes: [...e.primes, { primeId, since }],
+          history: [historyEntry('primes', `Attribution de la prime « ${prime.name} » à compter du ${formatDate(since)}`, currentUser.id, since), ...e.history],
+        }));
+      });
+    },
+
+    removePrime(employeeId, primeId) {
+      setDb((d) => {
+        const prime = d.primes.find((p) => p.id === primeId);
+        return mapEmployee(d, employeeId, (e) => ({
+          ...e, primes: e.primes.filter((p) => p.primeId !== primeId),
+          history: [historyEntry('primes', `Retrait de la prime « ${prime?.name ?? primeId} »`, currentUser.id), ...e.history],
+        }));
+      });
+    },
+
+    removeItem(key, id) {
+      setDb((d) => ({ ...d, [key]: (d[key] as { id: ID }[]).filter((x) => x.id !== id) }));
+    },
+
+    saveSchedule(schedule, departmentIds) {
+      setDb((d) => ({
+        ...d,
+        schedules: d.schedules.some((s) => s.id === schedule.id) ? d.schedules.map((s) => (s.id === schedule.id ? schedule : s)) : [...d.schedules, schedule],
+        departments: d.departments.map((dep) => (departmentIds.includes(dep.id) ? { ...dep, scheduleId: schedule.id }
+          : dep.scheduleId === schedule.id ? { ...dep, scheduleId: undefined } : dep)),
+      }));
+    },
+
+    saveNumbering(numbering) {
+      setDb((d) => ({ ...d, numberings: [...d.numberings.filter((n) => n.companyId !== numbering.companyId), numbering] }));
+    },
+
+    saveCircuit(circuit) {
+      setDb((d) => {
+        const exists = d.circuits.some((c) => c.id === circuit.id);
+        const circuits = (exists ? d.circuits.map((c) => (c.id === circuit.id ? circuit : c)) : [...d.circuits, circuit])
+          .map((c) => (c.id !== circuit.id && !c.archived && circuit.departmentId && c.departmentId === circuit.departmentId ? { ...c, archived: true } : c));
+        return { ...d, circuits };
       });
     },
 
@@ -291,16 +418,50 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDb((d) => ({ ...d, roles: d.roles.map((r) => (r.id === role.id ? role : r)) }));
     },
 
-    updateCircuit(circuit) {
-      setDb((d) => ({ ...d, circuits: d.circuits.map((c) => (c.id === circuit.id ? circuit : c)) }));
-    },
-
     markNotificationsRead() {
       setDb((d) => ({ ...d, notifications: d.notifications.map((n) => (n.companyId === companyId ? { ...n, read: true } : n)) }));
     },
   };
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+}
+
+/** Applique une transformation à une fiche employé. */
+function mapEmployee(d: Database, employeeId: ID, fn: (e: Employee) => Employee): Database {
+  return { ...d, employees: d.employees.map((e) => (e.id === employeeId ? fn(e) : e)) };
+}
+
+const STATUS_LABEL: Record<Employee['status'], string> = { actif: 'Actif', essai: 'Période d’essai', inactif: 'Inactif' };
+
+/** Entrées d'historique déduites d'une modification de fiche (RH-5, RH-6, RH-12). */
+function changesOf(d: Database, before: Employee | undefined, after: Employee, actorId: ID): EmployeeHistoryEntry[] {
+  if (!before) {
+    const circuit = circuitForDepartment(d, after.departmentId);
+    const primes = after.primes.map((p) => d.primes.find((x) => x.id === p.primeId)?.name).filter(Boolean);
+    return [
+      ...(after.allowPrimes ? [historyEntry('primes', `Primes autorisées${primes.length ? ` : ${primes.join(', ')}` : ''}`, actorId, after.hireDate)] : []),
+      historyEntry('circuit', `Circuit « ${circuit?.name ?? '—'} » appliqué automatiquement (département « ${rootDepartment(d, after.departmentId)?.name} »)`, actorId, after.hireDate),
+      historyEntry('recrutement', `Création du dossier — ${scheduleOn(d, after, after.hireDate).source}`, actorId, after.hireDate),
+    ];
+  }
+  const out: EmployeeHistoryEntry[] = [];
+  if (before.maritalStatus !== after.maritalStatus || before.childrenCount !== after.childrenCount) {
+    out.push(historyEntry('information', `Situation familiale : ${MARITAL_LABEL[after.maritalStatus]}, ${after.childrenCount} enfant(s) (avant : ${MARITAL_LABEL[before.maritalStatus]}, ${before.childrenCount})`, actorId));
+  }
+  if (before.departmentId !== after.departmentId || before.subDepartmentId !== after.subDepartmentId) {
+    const name = (id?: ID) => d.departments.find((x) => x.id === id)?.name;
+    const target = [name(after.departmentId), name(after.subDepartmentId)].filter(Boolean).join(' › ');
+    const circuit = circuitForDepartment(d, after.departmentId);
+    const schedule = after.scheduleMode === 'organisation'
+      ? `nouvel horaire appliqué : ${organisationalSchedule(d, after.departmentId, after.subDepartmentId).schedule?.name ?? 'aucun'}`
+      : 'horaire inchangé, géré par le tableau de chargement';
+    out.push(historyEntry('mutation', `Mutation vers « ${target} » — circuit « ${circuit?.name ?? '—'} », ${schedule}`, actorId));
+  }
+  if (before.functionId !== after.functionId) {
+    out.push(historyEntry('mutation', `Changement de fonction : ${d.functions.find((f) => f.id === after.functionId)?.name}`, actorId));
+  }
+  if (before.status !== after.status) out.push(historyEntry('statut', `Statut : ${STATUS_LABEL[before.status]} → ${STATUS_LABEL[after.status]}`, actorId));
+  return out;
 }
 
 export function useStore(): StoreValue {
@@ -317,7 +478,9 @@ export function useCompanyData() {
     const employees = by(db.employees);
     const people = employees.map((e) => toPersonView(db, e));
     const peopleMap = new Map(people.map((p) => [p.id, p]));
-    const departments = by(db.departments);
+    // « departments » : départements de premier niveau ; les sous-départements s'obtiennent par subDepartments(id).
+    const allDepartments = by(db.departments);
+    const departments = allDepartments.filter((d) => !d.parentId);
     return {
       company: db.companies.find((c) => c.id === companyId)!,
       employees,
@@ -328,6 +491,7 @@ export function useCompanyData() {
       person: (id?: ID) => (id ? peopleMap.get(id) : undefined),
       departments,
       activeDepartments: departments.filter((d) => !d.archived),
+      subDepartments: (parentId?: ID) => allDepartments.filter((d) => parentId && d.parentId === parentId),
       department: (id?: ID) => db.departments.find((d) => d.id === id),
       departmentName: (id?: ID) => db.departments.find((d) => d.id === id)?.name,
       functions: by(db.functions),
@@ -344,6 +508,11 @@ export function useCompanyData() {
       country: (id?: ID) => db.countries.find((c) => c.id === id),
       roles: by(db.roles),
       circuits: by(db.circuits),
+      primes: by(db.primes),
+      documentTypes: by(db.documentTypes),
+      prime: (id?: ID) => db.primes.find((p) => p.id === id),
+      loadingPeriods: by(db.loadingPeriods),
+      currency: currencyOf(db.companies.find((c) => c.id === companyId)),
       requests: by(db.requests),
       events: by(db.events),
       notifications: by(db.notifications),

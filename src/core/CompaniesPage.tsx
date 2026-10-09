@@ -109,12 +109,14 @@ const COLORS = ['#2f5bd3', '#0f8a7a', '#8a4fd1', '#c2410c', '#0e7490', '#b45309'
 
 /** Création (avec administrateur obligatoire) ou modification de l'identité d'une société. */
 function CompanyForm({ open, onClose, company }: { open: boolean; onClose: () => void; company?: Company }) {
-  const { db, saveCompany, addUser, showCredentials, toast } = useStore();
+  const { db, saveCompany, addUser, showCredentials, toast, tenantUser } = useStore();
   const quota = useQuota();
   const isNew = !company;
   const blank: Company = { id: '', name: '', legalName: '', taxId: '', city: '', country: 'Maroc', color: COLORS[db.companies.length % COLORS.length], createdAt: TODAY };
   const [f, setF] = useState<Company>(company ?? blank);
   const [mode, setMode] = useState<'new' | 'existing'>('new');
+  /** « Me désigner comme administrateur » : l'utilisateur connecté devient l'admin de la société. */
+  const [self, setSelf] = useState(false);
   const [adminId, setAdminId] = useState('');
   const [admin, setAdmin] = useState({ firstName: '', lastName: '', email: '' });
   const [submitted, setSubmitted] = useState(false);
@@ -122,7 +124,7 @@ function CompanyForm({ open, onClose, company }: { open: boolean; onClose: () =>
 
   useEffect(() => {
     if (!open) return;
-    setF(company ?? blank); setMode(quota.usersFull ? 'existing' : 'new'); setAdminId(''); setAdmin({ firstName: '', lastName: '', email: '' }); setSubmitted(false);
+    setF(company ?? blank); setMode(quota.usersFull ? 'existing' : 'new'); setSelf(false); setAdminId(''); setAdmin({ firstName: '', lastName: '', email: '' }); setSubmitted(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, company]);
 
@@ -130,10 +132,10 @@ function CompanyForm({ open, onClose, company }: { open: boolean; onClose: () =>
   if (!f.name.trim()) errors.name = 'Nom requis.';
   if (!f.legalName.trim()) errors.legalName = 'Raison sociale requise.';
   if (!f.city.trim()) errors.city = 'Ville requise.';
-  if (isNew && mode === 'existing' && !adminId) errors.admin = 'Choisissez l’administrateur.';
+  if (isNew && !self && mode === 'existing' && !adminId) errors.admin = 'Choisissez l’administrateur.';
   if (isNew && quota.companiesFull) errors.quota = 'Quota de sociétés atteint.';
-  if (isNew && mode === 'new' && quota.usersFull) errors.quota = 'Quota d’utilisateurs atteint : choisissez un utilisateur existant.';
-  const adminInvalid = isNew && mode === 'new' && Object.values(userErrors).some(Boolean);
+  if (isNew && !self && mode === 'new' && quota.usersFull) errors.quota = 'Quota d’utilisateurs atteint : choisissez un utilisateur existant.';
+  const adminInvalid = isNew && !self && mode === 'new' && Object.values(userErrors).some(Boolean);
   const err = (k: string) => (submitted ? errors[k] : undefined);
 
   const save = () => {
@@ -142,7 +144,8 @@ function CompanyForm({ open, onClose, company }: { open: boolean; onClose: () =>
     let adminUserId = company?.adminUserId;
     let created: TenantUser | undefined;
     if (isNew) {
-      if (mode === 'new') { created = makeUser(admin); addUser(created); adminUserId = created.id; } else adminUserId = adminId;
+      if (self) adminUserId = tenantUser.id;
+      else if (mode === 'new') { created = makeUser(admin); addUser(created); adminUserId = created.id; } else adminUserId = adminId;
     }
     const saved: Company = { ...f, id: f.id || newId('c'), name: f.name.trim(), legalName: f.legalName.trim(), adminUserId };
     saveCompany(saved);
@@ -176,17 +179,32 @@ function CompanyForm({ open, onClose, company }: { open: boolean; onClose: () =>
           <fieldset className="form-section">
             <legend>Administrateur de la société <span className="req">*</span></legend>
             <p className="small text-muted mb-12">
-              Il reçoit par e-mail son identifiant et un mot de passe temporaire, et dispose de toutes les permissions du core tenant pour cette société
-              (applications, administrateurs, utilisateurs).
+              {self
+                ? 'Vous disposerez de toutes les permissions du core tenant pour cette société (applications, administrateurs, utilisateurs). Aucun e-mail n’est envoyé : vous utilisez votre compte actuel.'
+                : 'Il reçoit par e-mail son identifiant et un mot de passe temporaire, et dispose de toutes les permissions du core tenant pour cette société (applications, administrateurs, utilisateurs).'}
             </p>
-            <div className="radio-row mb-12" role="radiogroup" aria-label="Administrateur">
-              <label className={`radio-pill ${mode === 'new' ? 'checked' : ''} ${quota.usersFull ? 'disabled' : ''}`} title={quota.usersFull ? 'Quota d’utilisateurs atteint' : undefined}><input type="radio" name="co-admin" checked={mode === 'new'} disabled={quota.usersFull} onChange={() => setMode('new')} /> Créer un compte</label>
-              <label className={`radio-pill ${mode === 'existing' ? 'checked' : ''}`}><input type="radio" name="co-admin" checked={mode === 'existing'} onChange={() => setMode('existing')} /> Utilisateur existant</label>
-            </div>
-            {quota.usersFull && <p className="small text-warning mb-12">Quota d’utilisateurs atteint ({quota.users}/{quota.maxUsers}) : désignez un utilisateur existant.</p>}
-            {mode === 'new'
-              ? <UserIdentityFields f={admin} setF={setAdmin} errors={submitted ? userErrors : {}} />
-              : <Field label="Utilisateur" required error={err('admin')}>{(id) => <UserPicker id={id} value={adminId} onChange={setAdminId} />}</Field>}
+            <label className={`self-admin ${self ? 'checked' : ''}`}>
+              <input type="checkbox" checked={self} onChange={(e) => setSelf(e.target.checked)} />
+              <Avatar employee={tenantUser} size={34} />
+              <span className="self-admin-body">
+                <span className="self-admin-title">Me désigner comme administrateur</span>
+                <span className="self-admin-sub">{fullName(tenantUser)} · {tenantUser.email} · <span className="mono">{tenantUser.login}</span></span>
+              </span>
+              {self && <Badge tone="primary"><ShieldCheck size={12} aria-hidden /> Administrateur</Badge>}
+            </label>
+            {!self && (
+              <>
+                <div className="or-sep"><span>ou désigner une autre personne</span></div>
+                <div className="radio-row mb-12" role="radiogroup" aria-label="Administrateur">
+                  <label className={`radio-pill ${mode === 'new' ? 'checked' : ''} ${quota.usersFull ? 'disabled' : ''}`} title={quota.usersFull ? 'Quota d’utilisateurs atteint' : undefined}><input type="radio" name="co-admin" checked={mode === 'new'} disabled={quota.usersFull} onChange={() => setMode('new')} /> Créer un compte</label>
+                  <label className={`radio-pill ${mode === 'existing' ? 'checked' : ''}`}><input type="radio" name="co-admin" checked={mode === 'existing'} onChange={() => setMode('existing')} /> Utilisateur existant</label>
+                </div>
+                {quota.usersFull && <p className="small text-warning mb-12">Quota d’utilisateurs atteint ({quota.users}/{quota.maxUsers}) : désignez un utilisateur existant.</p>}
+                {mode === 'new'
+                  ? <UserIdentityFields f={admin} setF={setAdmin} errors={submitted ? userErrors : {}} />
+                  : <Field label="Utilisateur" required error={err('admin')}>{(id) => <UserPicker id={id} value={adminId} onChange={setAdminId} />}</Field>}
+              </>
+            )}
           </fieldset>
         )}
         {submitted && errors.quota && <p className="field-error">{errors.quota}</p>}

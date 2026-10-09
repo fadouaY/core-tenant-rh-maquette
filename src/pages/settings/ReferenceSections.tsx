@@ -2,56 +2,56 @@
 import { useState } from 'react';
 import { newId, useCompanyData, useStore } from '../../store';
 import { Badge } from '../../components/ui';
-import { formatDate, formatWeekdayShort } from '../../utils/dates';
+import { Pencil } from 'lucide-react';
+import type { Schedule } from '../../types';
+import { formatDate, formatRange, formatWeekdayShort } from '../../utils/dates';
+import { scheduleUsage } from '../../utils/org';
 import { ArchivableTable, QuickAddModal } from '../../components/settingsKit';
+import { ScheduleEditor } from './ScheduleEditor';
 
 const DAY_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 
-function minutes(t: string) { const [h, m] = t.split(':').map(Number); return h * 60 + m; }
-
-
+/** Scénarios d'horaires (RH-21) : création et modification dans ScheduleEditor. */
 export function SchedulesSection() {
-  const { companyId, addItem, toast } = useStore();
+  const { db } = useStore();
   const data = useCompanyData();
-  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<{ schedule?: Schedule }>();
   return (
     <>
       <ArchivableTable
-        title="Horaires et créneaux" addLabel="Ajouter un horaire" collection="schedules" onAdd={() => setOpen(true)}
-        description="Jours travaillés et créneaux. Les jours non travaillés sont exclus du décompte des congés (exemple)."
+        title="Horaires et créneaux" addLabel="Nouveau scénario" collection="schedules" onAdd={() => setEditing({})}
+        description="Scénarios d’horaires : période, créneaux, jours travaillés par département et jours exceptionnels. Ils s’affectent aux départements et sous-départements, ou aux périodes du tableau de chargement. Un horaire utilisé ne peut pas être archivé."
         rows={data.schedules} nameOf={(s) => s.name}
+        rowActions={(s) => (
+          <button type="button" className="btn btn-sm btn-ghost" disabled={s.archived} onClick={() => setEditing({ schedule: s })} aria-label={`Modifier ${s.name}`}><Pencil size={13} aria-hidden /> Modifier</button>
+        )}
         columns={[
-          { header: 'Horaire', render: (s) => <span className="person-name">{s.name}</span> },
+          { header: 'Horaire', render: (s) => <><span className="person-name">{s.name}</span>{s.startDate && s.endDate && <span className="block small text-muted">{formatRange(s.startDate, s.endDate)}</span>}</> },
           { header: 'Jours travaillés', render: (s) => (
             <span className="day-pills">{DAY_NAMES.map((d, i) => <span key={d} className={`day-pill ${s.workDays.includes(i + 1) ? 'on' : ''}`} aria-label={`${d} ${s.workDays.includes(i + 1) ? 'travaillé' : 'non travaillé'}`}>{d[0]}</span>)}</span>
           ) },
           { header: 'Créneaux', render: (s) => <span className="small">{s.slots.map((sl) => `${sl.label} ${sl.start}–${sl.end}`).join(' · ')}</span> },
-          { header: 'Heures / semaine', className: 'num', render: (s) => {
-            const perDay = s.slots.reduce((sum, sl) => sum + minutes(sl.end) - minutes(sl.start), 0) / 60;
-            return `${(perDay * s.workDays.length).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} h`;
+          { header: 'Volume', className: 'num', render: (s) => (s.weeklyHours ? `${s.weeklyHours.toLocaleString('fr-FR')} h` : '—') },
+          { header: 'Affecté à', render: (s) => {
+            const u = scheduleUsage(db, s.id);
+            if (!u.inUse) return <span className="text-muted small">Non utilisé</span>;
+            return (
+              <span className="small">
+                {u.departments.map((d) => d.name).join(', ')}
+                {u.periods.length > 0 && <span className="block text-muted">{u.periods.length} période(s) du tableau de chargement</span>}
+              </span>
+            );
           } },
-          { header: 'Profils', className: 'num', render: (s) => data.profiles.filter((p) => p.scheduleId === s.id).length },
+          { header: 'Jours except.', className: 'num', render: (s) => s.exceptionalOffDays?.length || '—' },
+          { header: 'Employés', className: 'num', render: (s) => data.profiles.filter((p) => p.scheduleId === s.id).length },
         ]}
-      />
-      <QuickAddModal open={open} onClose={() => setOpen(false)} title="Nouvel horaire"
-        initial={{ name: '', days: '5', amStart: '09:00', amEnd: '12:30', pmStart: '14:00', pmEnd: '18:00' }}
-        fields={[
-          { key: 'name', label: 'Nom', type: 'text', required: true },
-          { key: 'days', label: 'Jours travaillés', type: 'select', options: [{ value: '5', label: 'Du lundi au vendredi' }, { value: '6', label: 'Du lundi au samedi' }, { value: '4', label: 'Du lundi au jeudi' }] },
-          { key: 'amStart', label: 'Matin — début', type: 'text', placeholder: '09:00' },
-          { key: 'amEnd', label: 'Matin — fin', type: 'text', placeholder: '12:30' },
-          { key: 'pmStart', label: 'Après-midi — début', type: 'text', placeholder: '14:00' },
-          { key: 'pmEnd', label: 'Après-midi — fin', type: 'text', placeholder: '18:00' },
-        ]}
-        onSubmit={(v) => {
-          addItem('schedules', {
-            id: newId('s'), companyId, name: String(v.name),
-            workDays: Array.from({ length: Number(v.days) }, (_, i) => i + 1),
-            slots: [{ label: 'Matin', start: String(v.amStart), end: String(v.amEnd) }, { label: 'Après-midi', start: String(v.pmStart), end: String(v.pmEnd) }],
-          });
-          toast('Horaire ajouté');
+        archiveBlockedBy={(s) => {
+          const u = scheduleUsage(db, s.id);
+          if (!u.inUse) return undefined;
+          return `« ${s.name} » est encore utilisé (${[u.departments.length ? `${u.departments.length} département(s)` : '', u.periods.length ? `${u.periods.length} période(s) planifiée(s)` : ''].filter(Boolean).join(', ')}) : affectez un autre horaire avant de l’archiver.`;
         }}
       />
+      {editing && <ScheduleEditor schedule={editing.schedule} onClose={() => setEditing(undefined)} />}
     </>
   );
 }

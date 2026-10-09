@@ -1,6 +1,7 @@
 // Calculs de démonstration des congés : ces règles sont des exemples, pas des règles métier définitives.
 import type { ApprovalStep, Database, DayPart, Employee, HrEvent, ID, ISODate, LeaveProfile, PersonView } from '../types';
-import { eachDay, isoWeekday, overlaps } from './dates';
+import { eachDay, overlaps } from './dates';
+import { approversFor, circuitOfEmployee, isWorkingDay, rootDepartment, scheduleOn } from './org';
 
 export interface LeaveCount {
   calendarDays: number;
@@ -18,9 +19,10 @@ export function countLeaveDays(
 ): LeaveCount {
   const empty: LeaveCount = { calendarDays: 0, nonWorkingDays: 0, holidays: [], halfDayDeduction: 0, total: 0 };
   const profile = profileOf(db, employeeId);
-  if (!profile || !start || !end || end < start) return empty;
-  const schedule = db.schedules.find((s) => s.id === profile.scheduleId);
-  const workDays = schedule?.workDays ?? [1, 2, 3, 4, 5];
+  const employee = db.employees.find((e) => e.id === employeeId);
+  if (!profile || !employee || !start || !end || end < start) return empty;
+  // Jours travaillés selon l'horaire en vigueur chaque jour (il peut changer d'une période de chargement à l'autre).
+  const isWorkDay = (d: ISODate) => isWorkingDay(db, employee, d);
   const holidayMap = new Map(
     db.holidays.filter((h) => h.companyId === profile.companyId && !h.archived).map((h) => [h.date, h.name]),
   );
@@ -29,7 +31,7 @@ export function countLeaveDays(
   const holidays: LeaveCount['holidays'] = [];
   const counted: ISODate[] = [];
   for (const d of days) {
-    if (!workDays.includes(isoWeekday(d))) nonWorking++;
+    if (!isWorkDay(d)) nonWorking++;
     else if (holidayMap.has(d)) holidays.push({ date: d, name: holidayMap.get(d)! });
     else counted.push(d);
   }
@@ -117,22 +119,14 @@ export function currentStep(req: { steps: ApprovalStep[] }): ApprovalStep | unde
   return req.steps.find((s) => s.status === 'en_attente');
 }
 
-/** Approbateurs résolus à partir du circuit, du responsable et du département. */
+/** Approbateurs résolus à partir du circuit, du responsable et du département (saut automatique : voir utils/org). */
 export function resolveApprovers(db: Database, employeeId: ID, circuitId: ID): ID[] {
-  const person = personView(db, employeeId);
-  const circuit = db.circuits.find((c) => c.id === circuitId);
-  if (!person || !circuit || circuit.exempt) return [];
-  const ids: ID[] = [];
-  for (const step of circuit.steps) {
-    const id = step.kind === 'manager' ? person.managerId : step.kind === 'departmentHead' ? person.departmentHeadId : step.employeeId;
-    if (id && id !== employeeId && !ids.includes(id)) ids.push(id);
-  }
-  return ids;
+  return approversFor(db, employeeId, db.circuits.find((c) => c.id === circuitId));
 }
 
 /** Vue enrichie d'un employé (noms de département et de fonction). */
 export function toPersonView(db: Database, e: Employee): PersonView {
-  const dep = db.departments.find((d) => d.id === e.departmentId);
+  const dep = rootDepartment(db, e.departmentId);
   return {
     id: e.id, companyId: e.companyId, firstName: e.firstName, lastName: e.lastName, matricule: e.matricule, email: e.email,
     departmentId: e.departmentId, departmentName: dep?.name ?? '', departmentHeadId: dep?.headId,
@@ -146,14 +140,35 @@ export function personView(db: Database, id?: ID): PersonView | undefined {
   return e ? toPersonView(db, e) : undefined;
 }
 
-/** Profil congé par défaut d'un nouvel employé (valeurs de démonstration). */
+/** Profil congé par défaut d'un nouvel employé ; horaire, circuit et approbateurs sont ensuite dérivés (deriveProfiles). */
 export function defaultProfile(db: Database, e: Employee): LeaveProfile {
   const by = <T extends { companyId: ID; archived?: boolean }>(l: T[]) => l.filter((x) => x.companyId === e.companyId && !x.archived);
-  const circuit = by(db.circuits).find((c) => !c.exempt) ?? by(db.circuits)[0];
   return {
-    employeeId: e.id, companyId: e.companyId,
-    scheduleId: by(db.schedules)[0]?.id ?? '',
+    employeeId: e.id, companyId: e.companyId, scheduleId: '',
     roleId: by(db.roles).find((r) => r.name.startsWith('Employ') || r.name.startsWith('Salari'))?.id ?? by(db.roles)[0]?.id ?? '',
-    extraPermissions: [], removedPermissions: [], circuitId: circuit?.id ?? '', approverIds: [], carryOver: {},
+    extraPermissions: [], removedPermissions: [], circuitId: '', approverIds: [], carryOver: {},
   };
+}
+
+/**
+ * Recalcule les champs dérivés des profils : horaire en vigueur, circuit du département et approbateurs (RH-6, RH-23).
+ * Appelé après chaque modification de l'état : un changement de rattachement, de circuit ou de planification
+ * s'applique ainsi partout sans saisie.
+ */
+export function deriveProfiles(db: Database): Database {
+  let changed = false;
+  const profiles = db.profiles.map((p) => {
+    const e = db.employees.find((x) => x.id === p.employeeId);
+    if (!e) return p;
+    const circuit = circuitOfEmployee(db, e);
+    const next = {
+      scheduleId: scheduleOn(db, e).schedule?.id ?? '',
+      circuitId: circuit?.id ?? '',
+      approverIds: approversFor(db, e.id, circuit),
+    };
+    if (next.scheduleId === p.scheduleId && next.circuitId === p.circuitId && next.approverIds.join() === p.approverIds.join()) return p;
+    changed = true;
+    return { ...p, ...next };
+  });
+  return changed ? { ...db, profiles } : db;
 }

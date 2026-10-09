@@ -13,11 +13,12 @@ import { DashboardPage } from './pages/dashboard/DashboardPage';
 import { EmployeesPage } from './pages/employees/EmployeesPage';
 import { EventsPage } from './pages/events/EventsPage';
 import { LeavesPage } from './pages/leave/LeavesPage';
+import { LoadingBoardPage } from './pages/loading/LoadingBoardPage';
 import { SettingsPage } from './pages/settings/SettingsPage';
 
 // Core tenant : #/core/applications[/rh], #/core/societes[/nouvelle|/:id], #/core/utilisateurs[/nouveau|/:id]
 // Application RH : #/tableau-de-bord, #/employes[/nouveau|/:id], #/conges/demandes[/nouvelle|/:id], #/conges/soldes,
-//                  #/calendrier[/perso], #/evenements, #/parametres/:section
+//                  #/calendrier[/perso], #/evenements, #/chargement, #/parametres/:section
 const AUTH_ROUTES: AuthMode[] = ['connexion', 'inscription', 'mot-de-passe-oublie'];
 
 // À l'ouverture (ou au rechargement), on arrive toujours sur la connexion, jamais directement sur l'inscription.
@@ -87,6 +88,7 @@ function RhApp({ route }: { route: string[] }) {
     case 'conges': page = <LeavesPage section={sub} param={b} />; break;
     case 'calendrier': page = <CalendarPage param={a} />; break;
     case 'evenements': page = <EventsPage />; break;
+    case 'chargement': page = <LoadingBoardPage />; break;
     case 'parametres': page = <SettingsPage param={sub} />; break;
     default: page = <DashboardPage />;
   }
