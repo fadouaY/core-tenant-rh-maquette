@@ -4,9 +4,11 @@ import { navigate, useCompanyData } from '../../store';
 import { EmptyState, Tabs } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
 import type { ID } from '../../types';
+import { contractsOf } from '../../utils/contracts';
 import { LeaveDetail } from '../leave/LeaveDetail';
 import { LeaveForm } from '../leave/LeaveForm';
 import { LeaveTable } from '../leave/LeaveTable';
+import { ContractsTab } from './EmployeeContracts';
 import { EmployeeForm } from './EmployeeForm';
 import { AccessTab, ProfileTab } from './EmployeeLeaveTabs';
 import { EmployeeHero, OverviewTab, WorkTimeTab, type EmployeeTab } from './EmployeeOverview';
@@ -61,6 +63,7 @@ export function EmployeeDetail({ employeeId }: { employeeId: ID }) {
       <Tabs<EmployeeTab> label="Sections de la fiche" value={tab} onChange={setTab} tabs={[
         { id: 'apercu', label: 'Vue d’ensemble' },
         { id: 'temps', label: 'Temps de travail' },
+        { id: 'contrats', label: 'Contrats', count: contractsOf(employee).length },
         { id: 'conges', label: 'Congés', count: pending || undefined },
         { id: 'remuneration', label: 'Rémunération' },
         { id: 'acces', label: 'Accès' },
@@ -70,6 +73,7 @@ export function EmployeeDetail({ employeeId }: { employeeId: ID }) {
       <div className="emp-tab">
         {tab === 'apercu' && <OverviewTab employee={employee} profile={profile} onTab={goTo} />}
         {tab === 'temps' && <WorkTimeTab employee={employee} onSwitch={() => setModeOpen(true)} />}
+        {tab === 'contrats' && <ContractsTab employee={employee} />}
         {tab === 'conges' && (
           <div className="fstack">
             <ProfileTab profile={profile} key={`p-${employee.id}`} />

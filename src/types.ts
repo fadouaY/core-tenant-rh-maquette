@@ -108,7 +108,7 @@ export interface EmployeePrime {
 }
 
 export type EmployeeHistoryKind =
-  | 'recrutement' | 'information' | 'mutation' | 'horaire' | 'planification' | 'primes' | 'salaire' | 'statut' | 'circuit';
+  | 'recrutement' | 'information' | 'mutation' | 'horaire' | 'planification' | 'primes' | 'salaire' | 'statut' | 'circuit' | 'contrat';
 
 /** Entrée de l'historique de l'employé (RH-10) : ajoutée par l'application, jamais modifiée. */
 export interface EmployeeHistoryEntry {
@@ -118,9 +118,44 @@ export interface EmployeeHistoryEntry {
   actorId?: ID;
 }
 
+export type ContractType = 'CDI' | 'CDD' | 'Stage';
+
+/** Nature d'un contrat dans le parcours de l'employé. */
+export type ContractKind = 'initial' | 'renouvellement' | 'avenant' | 'nouveau';
+
+/** Contrat signé par l'employé (RH-7) ; le contrat en vigueur alimente `Employee.contract` et `contractEnd`. */
+export interface EmployeeContract {
+  id: ID;
+  type: ContractType;
+  /** Absente pour un contrat saisi avant l'ajout de la nature : traité comme « nouveau ». */
+  kind?: ContractKind;
+  start: ISODate;
+  /** Absente pour un CDI. */
+  end?: ISODate;
+  /** Fin de la période d'essai éventuelle. */
+  trialEnd?: ISODate;
+  note?: string;
+  /** Clôture anticipée : date de fin effective et motif. */
+  closedAt?: ISODate;
+  closeReason?: string;
+}
+
+/** Pièce du dossier employé, classée par type de document (RH-17). */
+export interface EmployeeDocument {
+  id: ID;
+  typeId: ID;
+  fileName: string;
+  addedAt: ISODate;
+  /** Date d'expiration éventuelle (CIN, visite médicale…). */
+  expiresAt?: ISODate;
+}
+
 export interface Employee extends Person {
   companyId: ID;
+  /** Matricule attribué par l'application (numérotation de la société). */
   matricule: string;
+  /** Matricule interne de la société (paie, badge…), saisi manuellement. */
+  companyMatricule?: string;
   email: string;
   /** Numéro national (chiffres uniquement), complété par l'indicatif du pays. */
   phone: string;
@@ -132,17 +167,23 @@ export interface Employee extends Person {
   subDepartmentId?: ID;
   functionId: ID;
   hireDate: ISODate;
-  contract: 'CDI' | 'CDD' | 'Stage';
+  contract: ContractType;
   /** Fin du contrat (CDD, stage) ; absente pour un CDI. */
   contractEnd?: ISODate;
   status: EmployeeStatus;
   managerId?: ID;
-  account: { login: string; active: boolean; lastLogin?: string };
+  /** Compte d'accès ; `userId` = utilisateur du core tenant lié à la fiche. */
+  account: { login: string; active: boolean; lastLogin?: string; userId?: ID };
   maritalStatus: MaritalStatus;
   childrenCount: number;
   scheduleMode: ScheduleMode;
   /** Date d'effet du passage au tableau de chargement (mode « chargement »). */
   loadingSince?: ISODate;
+  /** Régime hebdomadaire contractuel (heures), pré-rempli lors de la planification dans le tableau de chargement. */
+  weeklyHours?: number;
+  /** Contrats signés par l'employé, en plus du contrat initial. */
+  contracts?: EmployeeContract[];
+  documents?: EmployeeDocument[];
   salaries: Salary[];
   /** Autorisation des primes, décochée par défaut ; la retirer révoque les primes actives. */
   allowPrimes: boolean;
@@ -349,7 +390,10 @@ export interface LeaveProfile {
   companyId: ID;
   /** Horaire en vigueur aujourd'hui ('' si l'employé n'est pas planifié dans le tableau de chargement). */
   scheduleId: ID;
+  /** Rôle principal (le premier des rôles attribués). */
   roleId: ID;
+  /** Rôles attribués, cumulables (le premier est le rôle principal) ; absent = `roleId` seul. */
+  roleIds?: ID[];
   extraPermissions: string[];
   removedPermissions: string[];
   /** Circuit du département ('' si le département n'en a pas). */

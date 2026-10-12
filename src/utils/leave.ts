@@ -172,3 +172,7 @@ export function deriveProfiles(db: Database): Database {
   });
   return changed ? { ...db, profiles } : db;
 }
+
+/** Rôles attribués à un profil (cumulables), le rôle principal en premier. */
+export const profileRoleIds = (p: Pick<LeaveProfile, 'roleId' | 'roleIds'>): ID[] =>
+  p.roleIds?.length ? p.roleIds : p.roleId ? [p.roleId] : [];

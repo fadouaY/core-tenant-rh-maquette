@@ -132,7 +132,7 @@ export function AccessTab({ profile }: { profile: LeaveProfile }) {
           <li><Badge tone="danger">{counts.retire}</Badge> retirées individuellement</li>
         </ul>
         <SaveBar dirty={dirty} onReset={() => { setRoleId(profile.roleId); setExtra(profile.extraPermissions); setRemoved(profile.removedPermissions); }}
-          onSave={() => { saveProfile({ ...profile, roleId, extraPermissions: extra, removedPermissions: removed }); toast('Accès mis à jour'); }} />
+          onSave={() => { saveProfile({ ...profile, roleId, roleIds: profile.roleIds?.length ? [roleId, ...profile.roleIds.filter((x) => x !== roleId && x !== profile.roleId)] : undefined, extraPermissions: extra, removedPermissions: removed }); toast('Accès mis à jour'); }} />
       </section>
       <section className="panel panel-flush">
         <div className="table-wrap">

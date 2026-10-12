@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Archive, ArchiveRestore, KeyRound, Plus, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import { newId, useCompanyData, useStore } from '../../store';
+import { profileRoleIds } from '../../utils/leave';
 import { Alert, ArchivedBadge, Card, Drawer, Field, Switch } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
 import { knownPermissions, PermissionMatrix, PermissionSummary } from './PermissionMatrix';
@@ -16,7 +17,7 @@ export function RolesSection() {
   useEffect(() => setPerms(role?.permissions ?? []), [role?.id, role?.permissions]);
 
   const dirty = role && perms.slice().sort().join() !== role.permissions.slice().sort().join();
-  const holders = data.profiles.filter((p) => p.roleId === role?.id);
+  const holders = data.profiles.filter((p) => !!role && profileRoleIds(p).includes(role.id));
   const roles = data.roles.filter((r) => showArchived || !r.archived);
 
   return (
@@ -30,7 +31,7 @@ export function RolesSection() {
                 <ShieldCheck size={16} aria-hidden />
                 <span className="grow">
                   <span className="person-name">{r.name}</span> {r.archived && <ArchivedBadge />}
-                  <span className="block small text-muted">{r.permissions.length} permissions · {data.profiles.filter((p) => p.roleId === r.id).length} personne(s)</span>
+                  <span className="block small text-muted">{r.permissions.length} permissions · {data.profiles.filter((p) => profileRoleIds(p).includes(r.id)).length} personne(s)</span>
                 </span>
               </button>
             </li>

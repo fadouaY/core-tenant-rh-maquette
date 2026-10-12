@@ -2,23 +2,25 @@
 // Ordre de lecture : qui est-ce et où en est-il (en-tête, repères, alertes), puis le détail par thème.
 import type { ReactNode } from 'react';
 import {
-  AlertTriangle, AtSign, Briefcase, CalendarCheck, CalendarClock, ChevronRight, Clock, Coffee, FileSignature, History, KeyRound, MapPin,
-  Moon, Phone, UserRound, Users,
+  AlertTriangle, AtSign, Briefcase, CalendarCheck, CalendarClock, ChevronRight, Clock, Coffee, FileSignature, FileText, History, KeyRound,
+  MapPin, Moon, Paperclip, Phone, UserRound, Users, Wallet,
 } from 'lucide-react';
 import { useCompanyData, useStore } from '../../store';
 import { Avatar, Badge, EmployeeStatusBadge } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
-import type { Employee, LeaveProfile, Schedule, TimeSlot } from '../../types';
+import type { Employee, LeaveProfile, Prime, Role, Schedule, TimeSlot } from '../../types';
 import { diffDays, formatDate, formatDateTime, formatDayMonth, formatRange, TODAY } from '../../utils/dates';
 import { dayHours, formatDaysHours, toMinutes } from '../../utils/hours';
-import { getAnnualBalance } from '../../utils/leave';
+import { getAnnualBalance, profileRoleIds } from '../../utils/leave';
 import {
   circuitForDepartment, currentSalary, formatMoney, MARITAL_LABEL, periodsOf, scheduleOn, uncoveredRanges,
 } from '../../utils/org';
 import { formatPhone } from '../../utils/phone';
+import { CONTRACT_KIND_LABEL, CONTRACT_STATUS, contractsOf, contractStatus, effectiveEnd } from '../../utils/contracts';
+import { PERMISSIONS } from '../../data/mock';
 import { PRIME_PERIODICITY } from './EmployeeSections';
 
-export type EmployeeTab = 'apercu' | 'temps' | 'conges' | 'remuneration' | 'acces' | 'historique';
+export type EmployeeTab = 'apercu' | 'temps' | 'contrats' | 'conges' | 'remuneration' | 'acces' | 'historique';
 
 /** Ancienneté lisible : « 4 ans et 2 mois », « 3 mois », « Arrivé ce mois-ci ». */
 export function seniority(hireDate: string, today = TODAY): string {
@@ -68,7 +70,7 @@ export function EmployeeHero({ employee, profile, actions, onTab }: {
             <span className="emp-matricule">{employee.matricule}</span>
             <EmployeeStatusBadge status={employee.status} />
             <Badge tone="neutral">{employee.contract}</Badge>
-            <Badge tone="primary" icon={<KeyRound size={11} aria-hidden />}>{data.role(profile.roleId)?.name}</Badge>
+            {profileRoleIds(profile).map((id) => <Badge key={id} tone="primary" icon={<KeyRound size={11} aria-hidden />}>{data.role(id)?.name}</Badge>)}
             {employee.scheduleMode === 'chargement' && <Badge tone="warning" icon={<CalendarClock size={11} aria-hidden />}>Tableau de chargement</Badge>}
           </div>
         </div>
@@ -111,106 +113,252 @@ export function EmployeeHero({ employee, profile, actions, onTab }: {
   );
 }
 
-// ------------------------------------------------------------------ Vue d'ensemble
+// ------------------------------------------------------------------ Vue d'ensemble (rapport de la fiche)
 
-/** Ligne libellé / valeur, avec une valeur vide explicite. */
-function Item({ label, children, wide }: { label: string; children?: ReactNode; wide?: boolean }) {
-  const empty = children === undefined || children === null || children === '';
+/** Information du rapport : libellé au-dessus de la valeur ; une valeur vide est signalée explicitement. */
+function Row({ label, children, hint, wide }: { label: string; children?: ReactNode; hint?: ReactNode; wide?: boolean }) {
+  const empty = children === undefined || children === null || children === '' || children === false;
   return (
-    <div className={`emp-item ${wide ? 'wide' : ''}`}>
+    <div className={`rp-row ${wide ? 'wide' : ''}`}>
       <dt>{label}</dt>
-      <dd className={empty ? 'empty' : ''}>{empty ? 'Non renseigné' : children}</dd>
+      <dd className={empty ? 'is-empty' : ''}>
+        {empty ? 'Non renseigné' : children}
+        {!empty && hint && <span className="rp-hint">{hint}</span>}
+      </dd>
     </div>
   );
 }
 
+/** Section du rapport : titre, lien vers l'onglet où l'on modifie, contenu. */
+function Section({ icon, title, children, onOpen, openLabel = 'Gérer' }: {
+  icon: ReactNode; title: string; children: ReactNode; onOpen?: () => void; openLabel?: string;
+}) {
+  return (
+    <section className="rp-sec">
+      <header className="rp-sec-head">
+        <span className="rp-sec-icon" aria-hidden>{icon}</span>
+        <h3>{title}</h3>
+        {onOpen && <button type="button" className="rp-sec-link" onClick={onOpen}>{openLabel} <ChevronRight size={12} aria-hidden /></button>}
+      </header>
+      {children}
+    </section>
+  );
+}
+
 export function OverviewTab({ employee, profile, onTab }: { employee: Employee; profile: LeaveProfile; onTab: (t: EmployeeTab) => void }) {
+  const { db } = useStore();
   const data = useCompanyData();
+  const fn = data.fn(employee.functionId);
+  const links = fn ? data.functionLinks.filter((l) => !l.archived && l.functionIds.includes(fn.id)) : [];
+  const manager = data.employee(employee.managerId);
+  const now = scheduleOn(db, employee);
+  const loading = employee.scheduleMode === 'chargement';
+  const weekly = loading ? employee.weeklyHours
+    : now.schedule ? now.schedule.weeklyHours ?? Math.round(dayHours(now.schedule) * workDaysFor(employee, now.schedule).length * 10) / 10 : undefined;
+  const circuit = circuitForDepartment(db, employee.departmentId);
+  const approvers = profile.approverIds.map((id) => data.employee(id)).filter((e): e is Employee => !!e);
   const salary = currentSalary(employee);
-  const primes = employee.primes.map((p) => data.prime(p.primeId)).filter(Boolean);
-  const recent = [...employee.history].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 4);
+  const primes = employee.primes.map((p) => data.prime(p.primeId)).filter((p): p is Prime => !!p);
+  const primesMonthly = primes.reduce((s, p) => s + (p.periodicity === 'mensuelle' ? p.amount : 0), 0);
+  const balance = getAnnualBalance(db, employee.id);
+  const requests = data.requests.filter((r) => r.employeeId === employee.id);
+  const pending = requests.filter((r) => r.status === 'en_attente').length;
+  const nextLeave = requests.filter((r) => r.status === 'approuve' && r.start > TODAY).sort((a, b) => a.start.localeCompare(b.start))[0];
+  const user = db.users.find((u) => u.id === employee.account.userId) ?? db.users.find((u) => u.employeeLinks[employee.companyId] === employee.id);
+  const roles = profileRoleIds(profile).map((id) => data.role(id)).filter((r): r is Role => !!r);
+  const perms = new Set([...roles.flatMap((r) => r.permissions), ...profile.extraPermissions]);
+  profile.removedPermissions.forEach((k) => perms.delete(k));
+  const docs = employee.documents ?? [];
+  const requiredTypes = data.documentTypes.filter((t) => !t.archived && t.required);
+  const missingDocs = requiredTypes.filter((t) => !docs.some((d) => d.typeId === t.id));
+  const contracts = contractsOf(employee);
   const age = employee.birthDate ? Math.floor(diffDays(employee.birthDate, TODAY) / 365.25) : undefined;
+  const recent = [...employee.history].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 5);
+  const phone = formatPhone(data.country(employee.phoneCountryId), employee.phone);
+
+  // Complétude du dossier : informations attendues dans une fiche complète.
+  const checks: [string, boolean][] = [
+    ['Matricule société', !!employee.companyMatricule], ['Date de naissance', !!employee.birthDate], ['Téléphone', !!employee.phone],
+    ['Adresse', !!employee.address], ['Responsable N+1', !!manager], ['Compte utilisateur', !!user],
+    ...requiredTypes.map((t): [string, boolean] => [t.name, docs.some((d) => d.typeId === t.id)]),
+  ];
+  const done = checks.filter(([, ok]) => ok).length;
+  const pct = Math.round((done / checks.length) * 100);
+  const missing = checks.filter(([, ok]) => !ok).map(([l]) => l);
 
   return (
-    <div className="emp-layout">
-      <div className="emp-main">
-        <FormCard icon={<UserRound size={16} />} title="Identité et situation familiale">
-          <dl className="emp-grid">
-            <Item label="Prénom">{employee.firstName}</Item>
-            <Item label="Nom">{employee.lastName}</Item>
-            <Item label="Date de naissance">{employee.birthDate && <>{formatDate(employee.birthDate)} <span className="text-muted">· {age} ans</span></>}</Item>
-            <Item label="Matricule"><span className="mono">{employee.matricule}</span></Item>
-            <Item label="Situation familiale">{MARITAL_LABEL[employee.maritalStatus]}</Item>
-            <Item label="Enfants à charge">{employee.childrenCount === 0 ? 'Aucun' : employee.childrenCount}</Item>
-          </dl>
-        </FormCard>
-
-        <FormCard icon={<Briefcase size={16} />} title="Poste et rattachement" subtitle="L’horaire et le circuit d’approbation découlent du rattachement.">
-          <dl className="emp-grid">
-            <Item label="Fonction">
-              {data.fn(employee.functionId)?.name}
-              {data.fn(employee.functionId)?.interim && <span className="emp-sub">Intérim {data.fn(employee.functionId)?.kind}</span>}
-            </Item>
-            <Item label="Département">
-              {data.department(employee.departmentId)?.name}
-              {employee.subDepartmentId && <span className="emp-sub">Sous-département : {data.department(employee.subDepartmentId)?.name}</span>}
-            </Item>
-            <Item label="Mode horaire">
-              {employee.scheduleMode === 'organisation' ? 'Organisationnel' : 'Tableau de chargement'}
-              <button type="button" className="emp-sub link-btn" onClick={() => onTab('temps')}>Voir le temps de travail</button>
-            </Item>
-            <Item label="Circuit d’approbation">
-              {data.circuit(profile.circuitId)?.name}
-              <button type="button" className="emp-sub link-btn" onClick={() => onTab('conges')}>Voir les approbateurs</button>
-            </Item>
-          </dl>
-        </FormCard>
-
-        <FormCard icon={<FileSignature size={16} />} title="Contrat et rémunération"
-          actions={<button type="button" className="btn btn-sm btn-ghost" onClick={() => onTab('remuneration')}>Détail <ChevronRight size={13} aria-hidden /></button>}>
-          <dl className="emp-grid">
-            <Item label="Type de contrat">{employee.contract}{employee.contractEnd && <span className="emp-sub">Jusqu’au {formatDate(employee.contractEnd)}{employee.contractEnd < TODAY ? ' (échu)' : ''}</span>}</Item>
-            <Item label="Date d’embauche">{formatDate(employee.hireDate)} <span className="text-muted">· {seniority(employee.hireDate)}</span></Item>
-            <Item label="Salaire de base">{salary && <><strong>{formatMoney(salary.amount, data.currency)}</strong> <span className="text-muted">/ mois</span><span className="emp-sub">Depuis le {formatDate(salary.since)}</span></>}</Item>
-            <Item label="Primes">
-              {!employee.allowPrimes ? <span className="text-muted">Non autorisées</span>
-                : primes.length === 0 ? <span className="text-muted">Autorisées, aucune attribuée</span>
-                : <span className="emp-chips">{primes.map((p) => <span key={p!.id} className="emp-chip">{p!.name} · {formatMoney(p!.amount, data.currency)} <span className="text-muted">({PRIME_PERIODICITY[p!.periodicity].toLowerCase()})</span></span>)}</span>}
-            </Item>
-          </dl>
-        </FormCard>
+    <div className="rp">
+      <div className={`rp-complete ${pct === 100 ? 'ok' : ''}`}>
+        <div className="rp-complete-main">
+          <span className="rp-complete-pct">{pct} %</span>
+          <span className="rp-complete-text">
+            <strong>Complétude du dossier</strong>
+            <span className="rp-hint">{done} élément{done > 1 ? 's' : ''} sur {checks.length} renseigné{done > 1 ? 's' : ''}</span>
+          </span>
+          <span className="rp-meter" aria-hidden><span style={{ width: `${pct}%` }} /></span>
+        </div>
+        {missing.length > 0 && (
+          <div className="rp-missing"><span>À compléter :</span>{missing.map((m) => <span key={m} className="rp-tag warn">{m}</span>)}</div>
+        )}
       </div>
 
-      <aside className="emp-aside">
-        <FormCard icon={<AtSign size={16} />} title="Coordonnées">
-          <ul className="emp-contact">
-            <li><AtSign size={14} aria-hidden /><a className="link" href={`mailto:${employee.email}`}>{employee.email}</a></li>
-            <li><Phone size={14} aria-hidden />{formatPhone(data.country(employee.phoneCountryId), employee.phone) || <span className="text-muted">Non renseigné</span>}</li>
-            <li><MapPin size={14} aria-hidden />{employee.address || <span className="text-muted">Non renseignée</span>}</li>
-          </ul>
-        </FormCard>
+      <div className="rp-grid">
+        <div className="rp-col">
+          <Section icon={<UserRound size={14} />} title="Identité et état civil">
+            <dl className="rp-list">
+              <Row label="Matricule application"><span className="mono">{employee.matricule}</span></Row>
+              <Row label="Matricule société">{employee.companyMatricule && <span className="mono">{employee.companyMatricule}</span>}</Row>
+              <Row label="Date de naissance" hint={age !== undefined ? `${age} ans` : undefined}>{employee.birthDate && formatDate(employee.birthDate)}</Row>
+              <Row label="Situation familiale">{MARITAL_LABEL[employee.maritalStatus]}</Row>
+              <Row label="Enfants à charge">{employee.childrenCount === 0 ? 'Aucun' : employee.childrenCount}</Row>
+            </dl>
+          </Section>
 
-        <FormCard icon={<KeyRound size={16} />} title="Compte utilisateur"
-          actions={<button type="button" className="btn btn-sm btn-ghost" onClick={() => onTab('acces')}>Accès <ChevronRight size={13} aria-hidden /></button>}>
-          <dl className="emp-grid one">
-            <Item label="Accès">{employee.account.active ? <Badge tone="success">Actif</Badge> : <Badge tone="muted">Désactivé</Badge>}</Item>
-            <Item label="Identifiant">{employee.account.login && <span className="mono">{employee.account.login}</span>}</Item>
-            <Item label="Rôle">{data.role(profile.roleId)?.name}</Item>
-            <Item label="Dernière connexion">{employee.account.lastLogin ? formatDateTime(employee.account.lastLogin) : 'Jamais'}</Item>
-          </dl>
-        </FormCard>
+          <Section icon={<Briefcase size={14} />} title="Poste et rattachement">
+            <dl className="rp-list cols-4">
+              <Row label="Fonction">
+                {fn?.name}
+                {fn && (
+                  <span className="rp-tags">
+                    <span className={`rp-tag ${fn.interim ? 'info' : ''}`}>{fn.interim ? `Intérim ${fn.kind}` : 'Sans intérim'}</span>
+                    {fn.interim && fn.kind === 'groupe' && fn.minPresent ? <span className="rp-tag">Min. {fn.minPresent} présent(s)</span> : null}
+                    {links.map((l) => <span key={l.id} className="rp-tag">{l.name}</span>)}
+                  </span>
+                )}
+              </Row>
+              <Row label="Département" hint={employee.subDepartmentId ? `› ${data.department(employee.subDepartmentId)?.name}` : undefined}>{data.department(employee.departmentId)?.name}</Row>
+              <Row label="Responsable N+1" hint={manager ? data.fn(manager.functionId)?.name : undefined}>
+                {manager && <a className="link" href={`#/employes/${manager.id}`}>{manager.firstName} {manager.lastName}</a>}
+              </Row>
+              <Row label="Date d’embauche" hint={seniority(employee.hireDate)}>{formatDate(employee.hireDate)}</Row>
+            </dl>
+          </Section>
 
-        <FormCard icon={<History size={16} />} title="Activité récente"
-          actions={<button type="button" className="btn btn-sm btn-ghost" onClick={() => onTab('historique')}>Tout voir <ChevronRight size={13} aria-hidden /></button>}>
-          {recent.length === 0 ? <p className="fempty">Aucun événement.</p> : (
-            <ol className="emp-feed">
-              {recent.map((h, i) => (
-                <li key={i}><span className="emp-feed-date">{formatDate(h.at)}</span><span>{h.label}</span></li>
-              ))}
-            </ol>
-          )}
-        </FormCard>
-      </aside>
+          <Section icon={<Clock size={14} />} title="Temps de travail et approbation" onOpen={() => onTab('temps')} openLabel="Temps de travail">
+            <dl className="rp-list">
+              <Row label="Mode horaire" hint={loading ? (employee.loadingSince ? `Depuis le ${formatDate(employee.loadingSince)}` : undefined) : 'Hérité du rattachement'}>
+                {loading ? 'Tableau de chargement' : 'Organisationnel'}
+              </Row>
+              <Row label="Horaire en vigueur" hint={now.schedule ? now.schedule.slots.map((s) => `${s.start}–${s.end}`).join(' · ') : undefined}>
+                {now.schedule ? now.schedule.name : now.unplanned ? <Badge tone="danger">Non planifié</Badge> : undefined}
+              </Row>
+              <Row label={loading ? 'Régime contractuel' : 'Volume hebdo.'}>{weekly ? `${weekly.toLocaleString('fr-FR')} h` : undefined}</Row>
+              <Row label="Circuit d’approbation" wide>
+                {circuit ? (
+                  <span className="rp-circuit">
+                    <span className="rp-circuit-name">{circuit.name}</span>
+                    {circuit.exempt ? <span className="rp-tag">Dispensé</span>
+                      : approvers.length > 0 && <ol className="rp-steps">{approvers.map((a, i) => <li key={a.id}><span>{i + 1}</span>{a.firstName} {a.lastName}</li>)}</ol>}
+                  </span>
+                ) : <Badge tone="danger">Aucun circuit actif</Badge>}
+              </Row>
+            </dl>
+          </Section>
+
+          <Section icon={<FileSignature size={14} />} title="Contrats" onOpen={() => onTab('contrats')} openLabel="Contrats">
+            <table className="rp-table">
+              <thead><tr><th>Type</th><th>Début</th><th>Fin</th><th>État</th></tr></thead>
+              <tbody>
+                {contracts.map((c) => {
+                  const st = CONTRACT_STATUS[contractStatus(c)];
+                  return (
+                    <tr key={c.id}>
+                      <td><strong>{c.type}</strong><span className="rp-hint">{CONTRACT_KIND_LABEL[c.kind ?? 'nouveau']}</span></td>
+                      <td>{c.start ? formatDate(c.start) : '—'}</td>
+                      <td>{effectiveEnd(c) ? formatDate(effectiveEnd(c)!) : <span className="text-muted">Indéterminée</span>}</td>
+                      <td><Badge tone={st.tone}>{st.label}</Badge></td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </Section>
+
+          <Section icon={<FileText size={15} />} title="Documents">
+            {docs.length === 0 ? <p className="rp-empty">Aucun document joint au dossier.</p> : (
+              <table className="rp-table">
+                <thead><tr><th>Type</th><th>Fichier</th><th>Ajouté le</th><th>Expiration</th></tr></thead>
+                <tbody>
+                  {docs.map((d) => {
+                    const expired = !!d.expiresAt && d.expiresAt < TODAY;
+                    return (
+                      <tr key={d.id}>
+                        <td><strong>{data.documentTypes.find((t) => t.id === d.typeId)?.name ?? '—'}</strong></td>
+                        <td className="rp-file"><Paperclip size={12} aria-hidden /> {d.fileName}</td>
+                        <td>{formatDate(d.addedAt)}</td>
+                        <td>{d.expiresAt ? <Badge tone={expired ? 'danger' : 'neutral'}>{expired ? 'Expiré le ' : ''}{formatDate(d.expiresAt)}</Badge> : <span className="text-muted">—</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            )}
+            {missingDocs.length > 0 && (
+              <p className="rp-alert"><AlertTriangle size={13} aria-hidden /> Pièces obligatoires manquantes : {missingDocs.map((t) => t.name).join(', ')}.</p>
+            )}
+          </Section>
+        </div>
+
+        <div className="rp-col">
+          <Section icon={<AtSign size={14} />} title="Coordonnées">
+            <ul className="rp-contact">
+              <li><AtSign size={13} aria-hidden /><a className="link" href={`mailto:${employee.email}`}>{employee.email}</a></li>
+              <li><Phone size={13} aria-hidden />{phone || <span className="rp-missing-val">Téléphone non renseigné</span>}</li>
+              <li><MapPin size={13} aria-hidden />{employee.address || <span className="rp-missing-val">Adresse non renseignée</span>}</li>
+            </ul>
+          </Section>
+
+          <Section icon={<Wallet size={14} />} title="Rémunération" onOpen={() => onTab('remuneration')} openLabel="Rémunération">
+            <div className="rp-figure">
+              <span className="rp-figure-value">{salary ? formatMoney(salary.amount, data.currency) : '—'}<small> brut / mois</small></span>
+              {salary && <span className="rp-hint">Depuis le {formatDate(salary.since)}</span>}
+            </div>
+            <div className="rp-sub">
+              <span className="rp-sub-label">Primes</span>
+              {!employee.allowPrimes ? <span className="text-muted">Non autorisées</span>
+                : primes.length === 0 ? <span className="text-muted">Autorisées, aucune attribuée</span>
+                : <ul className="rp-primes">{primes.map((p) => <li key={p.id}><span>{p.name} <small>{PRIME_PERIODICITY[p.periodicity].toLowerCase()}</small></span><span>{formatMoney(p.amount, data.currency)}</span></li>)}</ul>}
+              {primesMonthly > 0 && salary && <p className="rp-total"><span>Total mensuel estimé</span><strong>{formatMoney(salary.amount + primesMonthly, data.currency)}</strong></p>}
+            </div>
+          </Section>
+
+          <Section icon={<CalendarCheck size={14} />} title="Congés" onOpen={() => onTab('conges')} openLabel="Congés">
+            <div className="rp-kpis">
+              <div><span className={balance.available < 0 ? 'danger' : ''}>{balance.tracked ? formatDaysHours(balance.available, dayHours(now.schedule)) : '—'}</span><small>Disponible</small></div>
+              <div><span>{balance.tracked ? `${balance.taken.toLocaleString('fr-FR')} j` : '—'}</span><small>Pris</small></div>
+              <div><span className={pending ? 'warn' : ''}>{pending}</span><small>En attente</small></div>
+            </div>
+            <p className="rp-foot">{nextLeave ? <>Prochain congé : <strong>{formatRange(nextLeave.start, nextLeave.end)}</strong></> : 'Aucun congé à venir.'}</p>
+          </Section>
+
+          <Section icon={<KeyRound size={14} />} title="Compte et accès" onOpen={() => onTab('acces')} openLabel="Accès">
+            <div className="rp-account">
+              {user ? (
+                <span className="rp-user">
+                  <Avatar employee={user} size={28} />
+                  <span><strong>{user.firstName} {user.lastName}</strong><span className="rp-hint mono">{user.login}</span></span>
+                </span>
+              ) : <span className="rp-missing-val">Aucun utilisateur core tenant associé</span>}
+              {!employee.account.active ? <Badge tone="muted">Accès désactivé</Badge> : user?.status === 'invite' ? <Badge tone="warning">Invité</Badge> : <Badge tone="success">Accès actif</Badge>}
+            </div>
+            <dl className="rp-list cols-2">
+              <Row label={roles.length > 1 ? 'Rôles' : 'Rôle'} wide>
+                {roles.length > 0 && <span className="rp-tags">{roles.map((r, i) => <span key={r.id} className={`rp-tag ${i === 0 ? 'primary' : ''}`}>{r.name}{i === 0 && roles.length > 1 ? ' · principal' : ''}</span>)}</span>}
+              </Row>
+              <Row label="Permissions" hint={profile.extraPermissions.length ? `dont ${profile.extraPermissions.length} hors rôle` : undefined}>{`${perms.size} / ${PERMISSIONS.length}`}</Row>
+              <Row label="Dernière connexion">{employee.account.lastLogin ? formatDateTime(employee.account.lastLogin) : <span className="text-muted">Jamais</span>}</Row>
+            </dl>
+          </Section>
+
+          <Section icon={<History size={15} />} title="Activité récente" onOpen={() => onTab('historique')} openLabel="Historique">
+            {recent.length === 0 ? <p className="rp-empty">Aucun événement.</p> : (
+              <ol className="emp-feed rp-pad">
+                {recent.map((h, i) => <li key={i}><span className="emp-feed-date">{formatDate(h.at)}</span><span>{h.label}</span></li>)}
+              </ol>
+            )}
+          </Section>
+        </div>
+      </div>
     </div>
   );
 }

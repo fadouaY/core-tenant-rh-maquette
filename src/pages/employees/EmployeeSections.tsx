@@ -199,7 +199,7 @@ function PrimeModal({ open, employee, onClose, onSubmit }: { open: boolean; empl
 
 const KIND_LABEL: Record<EmployeeHistoryEntry['kind'], string> = {
   recrutement: 'Recrutement', information: 'Information générale', mutation: 'Rattachement', horaire: 'Mode horaire',
-  planification: 'Tableau de chargement', primes: 'Primes', salaire: 'Salaire', statut: 'Statut', circuit: 'Circuit',
+  planification: 'Tableau de chargement', primes: 'Primes', salaire: 'Salaire', statut: 'Statut', circuit: 'Circuit', contrat: 'Contrat',
 };
 
 /** Historique chronologique, en lecture seule (RH-10). */

@@ -3,11 +3,12 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { initialDatabase } from './data/mock';
 import { ensureAdminEmployee, provisionRh } from './core/provisioning';
 import type {
-  AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, EmployeeHistoryEntry, EmployeeNumbering, HrEvent, ID, ISODate,
+  AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, EmployeeContract, EmployeeHistoryEntry, EmployeeNumbering, HrEvent, ID, ISODate,
   LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, TenantUser,
 } from './types';
 import { formatDate, formatRange, nowStamp } from './utils/dates';
 import { countLeaveDays, deriveProfiles, toPersonView } from './utils/leave';
+import { activeContract } from './utils/contracts';
 import { circuitForDepartment, currencyOf, formatMoney, historyEntry, MARITAL_LABEL, nextMatricule, numberingOf, organisationalSchedule, rootDepartment, scheduleOn } from './utils/org';
 import { countAuthorization } from './utils/hours';
 
@@ -72,6 +73,8 @@ interface StoreValue {
   savePeriod: (period: LoadingPeriod) => void;
   cancelPeriod: (periodId: ID) => void;
   addSalary: (employeeId: ID, salary: Salary) => void;
+  /** Enregistre le parcours contractuel (RH-7) ; le contrat en vigueur met à jour le type et l'échéance de la fiche. */
+  saveContracts: (employeeId: ID, contracts: EmployeeContract[], label: string) => void;
   /** Retirer l'autorisation révoque toutes les primes actives (RH-8). */
   setPrimesAllowed: (employeeId: ID, allowed: boolean) => void;
   assignPrime: (employeeId: ID, primeId: ID, since: ISODate) => void;
@@ -216,8 +219,20 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         // Matricule attribué par la numérotation : le compteur passe au numéro suivant.
         const auto = !before ? nextMatricule(d, employee.companyId, employee.hireDate) : undefined;
         const numbering = auto && auto.matricule === employee.matricule ? { ...numberingOf(d, employee.companyId), next: auto.value + 1 } : undefined;
+        // Compte lié à un utilisateur du core tenant : lien fiche ↔ utilisateur et accès à l'application RH de la société.
+        const cid = employee.companyId;
+        const userId = employee.account.active ? employee.account.userId : undefined;
+        const users = d.users.map((u) => {
+          const links = { ...u.employeeLinks };
+          if (u.id === userId) links[cid] = employee.id;
+          else if (links[cid] === employee.id) delete links[cid];
+          return { ...u, employeeLinks: links };
+        });
+        const hasAccess = !userId || d.accesses.some((a) => a.userId === userId && a.appId === 'rh' && a.companyId === cid);
         return {
           ...d,
+          users,
+          accesses: hasAccess ? d.accesses : [...d.accesses, { userId: userId!, appId: 'rh', companyId: cid }],
           numberings: numbering ? [...d.numberings.filter((n) => n.companyId !== numbering.companyId), numbering] : d.numberings,
           employees: before ? d.employees.map((e) => (e.id === employee.id ? saved : e)) : [...d.employees, saved],
           profiles: hasProfile ? d.profiles.map((p) => (p.employeeId === employee.id ? profile : p)) : [...d.profiles, profile],
@@ -268,6 +283,18 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           history: [historyEntry('salaire', `Salaire de base ${formatMoney(salary.amount, currency)} à compter du ${formatDate(salary.since)} — ${salary.reason}`, currentUser.id, salary.since), ...e.history],
         }));
       });
+    },
+
+    saveContracts(employeeId, contracts, label) {
+      setDb((d) => mapEmployee(d, employeeId, (e) => {
+        const current = activeContract(contracts);
+        return {
+          ...e, contracts,
+          contract: current?.type ?? e.contract,
+          contractEnd: current ? current.closedAt ?? current.end : e.contractEnd,
+          history: [historyEntry('contrat', label, currentUser.id), ...e.history],
+        };
+      }));
     },
 
     setPrimesAllowed(employeeId, allowed) {

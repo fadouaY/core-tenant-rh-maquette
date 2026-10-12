@@ -4,11 +4,12 @@ import { ChevronDown, Plus, ShieldCheck, X } from 'lucide-react';
 import { PERMISSIONS } from '../../data/mock';
 import type { Role } from '../../types';
 
-export function ExtraPermissionsPicker({ role, value, onChange }: {
-  role?: Role; value: string[]; onChange: (keys: string[]) => void;
+export function ExtraPermissionsPicker({ role, roles, value, onChange }: {
+  role?: Role; /** Rôles cumulés : leurs permissions s'additionnent. */ roles?: Role[]; value: string[]; onChange: (keys: string[]) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const inRole = new Set(role?.permissions ?? []);
+  const all = roles ?? (role ? [role] : []);
+  const inRole = new Set(all.flatMap((r) => r.permissions));
   const available = PERMISSIONS.filter((p) => !inRole.has(p.key));
   const groups = [...new Set(available.map((p) => p.group))];
   const label = (key: string) => PERMISSIONS.find((p) => p.key === key)?.label ?? key;
@@ -17,7 +18,7 @@ export function ExtraPermissionsPicker({ role, value, onChange }: {
   return (
     <div className="extra-perms">
       <div className="extra-perms-head">
-        <span className="extra-perms-role"><ShieldCheck size={14} aria-hidden /> {role ? <>Le rôle <strong>{role.name}</strong> inclut {inRole.size} permission{inRole.size > 1 ? 's' : ''}.</> : 'Aucun rôle sélectionné.'}</span>
+        <span className="extra-perms-role"><ShieldCheck size={14} aria-hidden /> {all.length > 1 ? <>Les rôles <strong>{all.map((r) => r.name).join(' + ')}</strong> cumulent {inRole.size} permission{inRole.size > 1 ? 's' : ''}.</> : all[0] ? <>Le rôle <strong>{all[0].name}</strong> inclut {inRole.size} permission{inRole.size > 1 ? 's' : ''}.</> : 'Aucun rôle sélectionné.'}</span>
         <button type="button" className="btn btn-sm btn-ghost" aria-expanded={open} onClick={() => setOpen((o) => !o)} disabled={available.length === 0}>
           <Plus size={13} aria-hidden /> Ajouter des permissions <ChevronDown size={13} aria-hidden className={open ? 'rot-180' : ''} />
         </button>
@@ -33,7 +34,7 @@ export function ExtraPermissionsPicker({ role, value, onChange }: {
           ))}
         </ul>
       ) : (
-        <p className="extra-perms-empty">{available.length === 0 ? 'Ce rôle contient déjà toutes les permissions.' : 'Aucune permission supplémentaire.'}</p>
+        <p className="extra-perms-empty">{available.length === 0 ? (all.length > 1 ? 'Ces rôles couvrent déjà toutes les permissions.' : 'Ce rôle contient déjà toutes les permissions.') : 'Aucune permission supplémentaire.'}</p>
       )}
 
       {open && available.length > 0 && (

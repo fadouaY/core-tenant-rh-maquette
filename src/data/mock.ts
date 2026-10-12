@@ -292,6 +292,7 @@ function makeEmployees(companyId: string, prefix: string, domain: string, seeds:
     return {
       id, companyId, firstName: first, lastName: last,
       matricule: `${prefix}-${String(1001 + i * 7).padStart(5, '0')}`,
+      companyMatricule: `${companyId === 'c1' ? 'AC' : 'HS'}-P${String(450 + i * 3).padStart(4, '0')}`,
       email: `${login}@${domain}`,
       phone: `6${String(10 + i).padStart(2, '0')}${String(23 + i * 3).padStart(2, '0')}45${String(60 + i).padStart(2, '0')}`,
       phoneCountryId: companyId === 'c1' ? 'ctry-c1-ma' : `ctry-${companyId}-fr`,
