@@ -81,7 +81,7 @@ function RhApp({ route }: { route: string[] }) {
     );
   }
 
-  const sub = section === 'conges' ? (a ?? 'demandes') : section === 'parametres' ? (a ?? 'departements') : a ?? '';
+  const sub = section === 'conges' ? (a ?? 'demandes') : section === 'parametres' ? (a ?? 'numerotation') : a ?? '';
   let page;
   switch (section) {
     case 'employes': page = <EmployeesPage param={a} />; break;

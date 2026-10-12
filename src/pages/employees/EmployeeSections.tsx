@@ -255,7 +255,7 @@ export function RemunerationTab({ employee }: { employee: Employee }) {
   );
 }
 
-export const PRIME_TYPE = { fixe: 'Prime fixe', variable: 'Prime variable', exceptionnelle: 'Prime exceptionnelle' } as const;
+export const PRIME_TYPE = { fixe: 'Prime ponctuelle', variable: 'Prime variable', exceptionnelle: 'Prime exceptionnelle' } as const;
 export const PRIME_PERIODICITY: Record<PrimePeriodicity, string> = {
   mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle', semestrielle: 'Semestrielle', annuelle: 'Annuelle', ponctuelle: 'Ponctuelle (une fois)',
 };

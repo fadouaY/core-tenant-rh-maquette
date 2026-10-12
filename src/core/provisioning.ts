@@ -2,7 +2,7 @@
 // Quand le core tenant active l'application RH pour une société vide, on crée un socle
 // minimal (département, fonction, horaire, type de congé, rôles, circuits) et la fiche
 // de l'administrateur choisi, pour que l'application soit immédiatement utilisable.
-import { PERMISSIONS } from '../data/mock';
+import { defaultContractTypes, PERMISSIONS } from '../data/mock';
 import type { Database, Employee, ID, TenantUser } from '../types';
 import { TODAY } from '../utils/dates';
 
@@ -41,6 +41,9 @@ export function provisionRh(db: Database, companyId: ID): Database {
       leaveRules: [...d.leaveRules, { id: id('r'), companyId, leaveTypeId: ltId, label: 'Congé annuel — base', annualQuota: 18, accrual: '1,5 j par mois', maxCarryOver: 5, minNoticeDays: 7, scope: 'Tous les employés' }],
     };
   }
+  if (!has(d.contractTypes, companyId)) {
+    d = { ...d, contractTypes: [...d.contractTypes, ...defaultContractTypes(companyId, id('x'))] };
+  }
   if (!has(d.roles, companyId)) {
     d = { ...d, roles: [...d.roles,
       { id: id('ro'), companyId, name: 'Administrateur RH', description: 'Accès complet à l’application RH de la société.', permissions: PERMISSIONS.map((p) => p.key) },
@@ -48,10 +51,10 @@ export function provisionRh(db: Database, companyId: ID): Database {
     ] };
   }
   if (!has(d.circuits, companyId)) {
-    // Un circuit par département (RH-22) : le premier département est dispensé, son administrateur valide seul.
+    // Un circuit par département (RH-22) : le responsable du premier département valide ; ses propres demandes passent seules.
     const depId = d.departments.find((x) => x.companyId === companyId && !x.archived && !x.parentId)?.id;
     d = { ...d, circuits: [...d.circuits,
-      { id: id('ci'), companyId, name: 'Direction générale — dispensé', description: 'Validation automatique à l’envoi.', exempt: true, departmentId: depId, steps: [] },
+      { id: id('ci'), companyId, name: 'Direction générale', description: 'Validation par le responsable du département.', exempt: false, departmentId: depId, effectiveDate: TODAY, steps: [{ kind: 'departmentHead', label: 'Responsable du département', intervention: 'approbation' }] },
     ] };
   }
   if (!d.presencePolicies.some((x) => x.companyId === companyId)) {

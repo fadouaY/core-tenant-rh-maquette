@@ -1,7 +1,7 @@
 // Règles métier du rattachement organisationnel : circuit hérité du département (RH-22, RH-23),
 // horaire organisationnel ou tableau de chargement (RH-6, RH-21, RH-24 à RH-26), primes (RH-8, RH-27).
 import type {
-  ApprovalCircuit, Company, Database, Department, Employee, EmployeeHistoryEntry, EmployeeNumbering, ID, ISODate, LoadingPeriod, Schedule,
+  ApprovalCircuit, Company, Database, Department, Employee, EmployeeHistoryEntry, EmployeeNumbering, ID, NumberingEntity, ISODate, LoadingPeriod, Schedule,
 } from '../types';
 import { addDays, isoWeekday, TODAY } from './dates';
 
@@ -31,6 +31,8 @@ export interface CircuitStepView {
   approverId?: ID;
   /** « requester » : l'étape de l'employé lui-même ; « below » : niveau inférieur au sien ; « duplicate » : approbateur déjà présent. */
   skipped?: 'requester' | 'below' | 'duplicate' | 'undefined';
+  /** Niveau en consultation : informé, ne bloque pas la demande. */
+  consultation?: boolean;
 }
 
 /**
@@ -45,6 +47,7 @@ export function circuitStepsFor(db: Database, employeeId: ID, circuit?: Approval
   const steps: CircuitStepView[] = circuit.steps.map((s) => ({
     label: s.label,
     approverId: s.kind === 'manager' ? e.managerId : s.kind === 'departmentHead' ? (subHead ?? head) : s.employeeId,
+    consultation: s.intervention === 'consultation',
   }));
   const own = steps.findIndex((s) => s.approverId === employeeId);
   const seen = new Set<ID>();
@@ -58,9 +61,9 @@ export function circuitStepsFor(db: Database, employeeId: ID, circuit?: Approval
   });
 }
 
-/** Approbateurs effectifs, dans l'ordre. Vide = validation automatique (circuit dispensé ou dernier approbateur). */
+/** Approbateurs effectifs (approbation requise), dans l'ordre. Vide = validation automatique. Les niveaux en consultation sont seulement notifiés. */
 export const approversFor = (db: Database, employeeId: ID, circuit?: ApprovalCircuit): ID[] =>
-  circuitStepsFor(db, employeeId, circuit).filter((s) => !s.skipped).map((s) => s.approverId!);
+  circuitStepsFor(db, employeeId, circuit).filter((s) => !s.skipped && !s.consultation).map((s) => s.approverId!);
 
 // ---------------------------------------------------------------- Horaire (RH-6, RH-21, RH-24)
 
@@ -173,19 +176,65 @@ export function formatMatricule(n: Pick<EmployeeNumbering, 'prefix' | 'separator
   return parts.join(n.separator);
 }
 
-/** Numérotation de la société (valeurs par défaut si elle n'a pas encore été paramétrée). */
-export function numberingOf(db: Database, companyId: ID): EmployeeNumbering {
-  return db.numberings.find((n) => n.companyId === companyId)
-    ?? { companyId, prefix: (db.companies.find((c) => c.id === companyId)?.name ?? 'EMP').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase(), separator: '-', withYear: false, digits: 5, next: 1 };
+const sameSeries = (n: EmployeeNumbering, companyId: ID, entity: NumberingEntity) => n.companyId === companyId && (n.entity ?? 'employe') === entity;
+
+/** Numérotation d'une série de la société (valeurs par défaut si elle n'a pas encore été paramétrée). */
+export function numberingOf(db: Database, companyId: ID, entity: NumberingEntity = 'employe'): EmployeeNumbering {
+  const found = db.numberings.find((n) => sameSeries(n, companyId, entity));
+  if (found) return found;
+  if (entity === 'departement') return { companyId, entity, prefix: 'DEP', separator: '-', withYear: false, digits: 3, next: 1, letters: 3 };
+  if (entity === 'fonction') return { companyId, entity, prefix: 'FCT', separator: '-', withYear: false, digits: 3, next: 1, letters: 3 };
+  return { companyId, prefix: (db.companies.find((c) => c.id === companyId)?.name ?? 'EMP').replace(/[^A-Za-z]/g, '').slice(0, 3).toUpperCase(), separator: '-', withYear: false, digits: 5, next: 1 };
 }
 
-/** Prochain matricule libre : le compteur avance tant que le numéro est déjà pris. */
-export function nextMatricule(db: Database, companyId: ID, date: ISODate = TODAY): { matricule: string; value: number } {
-  const n = numberingOf(db, companyId);
-  const taken = new Set(db.employees.filter((e) => e.companyId === companyId).map((e) => e.matricule.trim().toUpperCase()));
+/** Remplace la numérotation d'une série, sans toucher aux autres séries de la société. */
+export const withNumbering = (db: Database, n: EmployeeNumbering): EmployeeNumbering[] =>
+  [...db.numberings.filter((x) => !sameSeries(x, n.companyId, n.entity ?? 'employe')), n];
+
+/** Codes déjà attribués dans une série (matricules, codes de département ou de fonction). */
+export function takenCodes(db: Database, companyId: ID, entity: NumberingEntity): Set<string> {
+  const codes = entity === 'departement' ? db.departments.filter((d) => d.companyId === companyId).map((d) => d.code)
+    : entity === 'fonction' ? db.functions.filter((f) => f.companyId === companyId).map((f) => f.code ?? '')
+    : db.employees.filter((e) => e.companyId === companyId).map((e) => e.matricule);
+  return new Set(codes.filter(Boolean).map((c) => c.trim().toUpperCase()));
+}
+
+
+/** Lettres significatives d'un nom : sans accents ni ponctuation, en majuscules (« Financier » → « FINANCIER »). */
+const lettersOf = (name: string) => name.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+
+/**
+ * Code d'un département ou d'une fonction : préfixe paramétré + premières lettres du nom (nombre paramétrable),
+ * ex. « DEP-FIN » pour « Financier ». Si le code est déjà pris, un numéro est ajouté (DEP-FIN2, DEP-FIN3…).
+ */
+export function nameCode(n: Pick<EmployeeNumbering, 'prefix' | 'separator' | 'letters'>, name: string, taken: Set<string> = new Set()): string {
+  const letters = lettersOf(name).slice(0, n.letters ?? 3);
+  if (!letters) return '';
+  const base = [n.prefix.trim().toUpperCase(), letters].filter(Boolean).join(n.separator);
+  let code = base;
+  for (let i = 2; taken.has(code); i++) code = `${base}${i}`;
+  return code;
+}
+
+/** Code proposé pour un nouveau département ou une nouvelle fonction, d'après son nom. */
+export const codeForName = (db: Database, companyId: ID, entity: Exclude<NumberingEntity, 'employe'>, name: string, exceptCode?: string) => {
+  const taken = takenCodes(db, companyId, entity);
+  if (exceptCode) taken.delete(exceptCode.trim().toUpperCase());
+  return nameCode(numberingOf(db, companyId, entity), name, taken);
+};
+/** Prochain code libre d'une série : le compteur avance tant que le numéro est déjà pris. */
+export function nextCode(db: Database, companyId: ID, entity: NumberingEntity, date: ISODate = TODAY): { code: string; value: number } {
+  const n = numberingOf(db, companyId, entity);
+  const taken = takenCodes(db, companyId, entity);
   let value = n.next;
   while (taken.has(formatMatricule(n, value, date))) value++;
-  return { matricule: formatMatricule(n, value, date), value };
+  return { code: formatMatricule(n, value, date), value };
+}
+
+/** Prochain matricule libre d'un employé. */
+export function nextMatricule(db: Database, companyId: ID, date: ISODate = TODAY): { matricule: string; value: number } {
+  const { code, value } = nextCode(db, companyId, 'employe', date);
+  return { matricule: code, value };
 }
 
 // ---------------------------------------------------------------- Historique (RH-10)

@@ -1,15 +1,10 @@
 import { useEffect, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Building2, ChevronRight, Pencil, Plus, Save, SkipForward, Trash2, UserCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Bell, Building2, ChevronRight, Eye, Info, ListChecks, Pencil, Plus, Save, SkipForward, Trash2, UserCheck } from 'lucide-react';
 import { newId, useCompanyData, useStore } from '../../store';
 import { Alert, ArchivedBadge, Avatar, Badge, Card, Drawer, Field, Switch } from '../../components/ui';
-import type { ApprovalCircuit, CircuitStep, CircuitStepKind } from '../../types';
+import type { ApprovalCircuit, CircuitIntervention, CircuitStep } from '../../types';
+import { formatDate, TODAY } from '../../utils/dates';
 import { circuitForDepartment, circuitStepsFor } from '../../utils/org';
-
-const KIND_LABEL: Record<CircuitStepKind, string> = {
-  manager: 'Manager direct (N+1)',
-  departmentHead: 'Responsable du département',
-  employee: 'Personne nommée',
-};
 
 /**
  * Circuits d'approbation (RH-22) : chacun est affecté à un seul département, qui n'a qu'un circuit actif ;
@@ -27,7 +22,7 @@ export function CircuitsSection() {
 
   const create = () => setEditing({
     id: '', companyId, name: '', description: '', exempt: false, departmentId: uncovered[0]?.id,
-    steps: [{ kind: 'manager', label: KIND_LABEL.manager }],
+    effectiveDate: TODAY, steps: [{ kind: 'manager', label: 'Responsable hiérarchique direct', intervention: 'approbation' }],
   });
 
   const toggleArchive = (c: ApprovalCircuit) => {
@@ -74,7 +69,7 @@ export function CircuitsSection() {
                     <p className="person-name">{c.name} {c.archived && <ArchivedBadge />}</p>
                     <p className="small text-muted">
                       <Building2 size={12} aria-hidden className="inline-icon" /> {c.departmentId ? data.departmentName(c.departmentId) : 'Aucun département'}
-                      {' · '}{users} employé(s){c.description ? ` · ${c.description}` : ''}
+                      {' · '}{users} employé(s){c.effectiveDate ? ` · en vigueur depuis le ${formatDate(c.effectiveDate)}` : ''}{c.description ? ` · ${c.description}` : ''}
                     </p>
                   </div>
                   <div className="row-gap">
@@ -101,7 +96,7 @@ export function CircuitsSection() {
                           <span className={`chain-step ${person && !skipped ? '' : 'muted'}`}>
                             <span className="step-num">{i + 1}</span>
                             <span>
-                              <span className="block small text-muted">{s.label}</span>
+                              <span className="block small text-muted">{s.label}{s.intervention === 'consultation' && <span className="ci-consult"><Eye size={11} aria-hidden /> Consultation</span>}</span>
                               {person ? <span className="row-gap"><Avatar employee={person} size={20} /> {person.firstName} {person.lastName}</span> : <span className="small text-muted">Non défini pour cet employé</span>}
                               {skipped && person && <span className="block small text-muted"><SkipForward size={11} aria-hidden className="inline-icon" /> {skipped === 'requester' ? 'Demandeur : niveau sauté' : skipped === 'below' ? 'Niveau inférieur au demandeur : sauté' : 'Doublon : sauté'}</span>}
                             </span>
@@ -137,84 +132,138 @@ export function CircuitsSection() {
   );
 }
 
+const INTERVENTION: Record<CircuitIntervention, string> = {
+  approbation: 'Approbation requise (bloquant)',
+  consultation: 'Consultation (pour information)',
+};
+
+/** Approbateur d'un niveau, encodé pour la liste : rôle dynamique ou personne nommée (« emp:<id> »). */
+const approverValue = (s: CircuitStep) => (s.kind === 'employee' ? (s.employeeId ? `emp:${s.employeeId}` : '') : s.kind);
+
 function CircuitEditor({ circuit, onClose, onSave }: { circuit: ApprovalCircuit; onClose: () => void; onSave: (c: ApprovalCircuit) => void }) {
   const data = useCompanyData();
-  const [c, setC] = useState(circuit);
+  // Le profil « dispensé » n'est plus proposé : un ancien circuit dispensé repart d'un niveau manager.
+  const init = (x: ApprovalCircuit): ApprovalCircuit => ({
+    ...x, exempt: false, effectiveDate: x.effectiveDate ?? TODAY,
+    steps: x.steps.length ? x.steps : [{ kind: 'manager', label: 'Responsable hiérarchique direct', intervention: 'approbation' }],
+  });
+  const [c, setC] = useState(() => init(circuit));
   const [submitted, setSubmitted] = useState(false);
-  useEffect(() => setC(circuit), [circuit]);
+  useEffect(() => setC(init(circuit)), [circuit]);
   const people = data.people.filter((e) => e.status !== 'inactif');
   const current = data.circuits.find((x) => x.id !== c.id && !x.archived && x.departmentId && x.departmentId === c.departmentId);
   const leaving = circuit.departmentId && circuit.departmentId !== c.departmentId ? data.department(circuit.departmentId) : undefined;
+  const subs = c.departmentId ? data.subDepartments(c.departmentId).filter((d) => !d.archived) : [];
 
   const setStep = (i: number, patch: Partial<CircuitStep>) => setC((x) => ({ ...x, steps: x.steps.map((s, j) => (j === i ? { ...s, ...patch } : s)) }));
   const move = (i: number, d: -1 | 1) => setC((x) => { const steps = [...x.steps]; [steps[i], steps[i + d]] = [steps[i + d], steps[i]]; return { ...x, steps }; });
+  const setApprover = (i: number, value: string) => {
+    const step = c.steps[i];
+    if (value === 'manager' || value === 'departmentHead') {
+      setStep(i, { kind: value, employeeId: undefined, label: step.label || (value === 'manager' ? 'Responsable hiérarchique direct' : 'Responsable du département') });
+    } else {
+      const p = data.person(value.replace('emp:', ''));
+      setStep(i, { kind: 'employee', employeeId: p?.id, label: step.label || p?.functionName || '' });
+    }
+  };
 
   const nameError = !c.name.trim() ? 'Nom requis.' : undefined;
   const depError = !c.departmentId ? 'Un circuit doit être affecté à un département.' : undefined;
-  const stepError = !c.exempt && c.steps.length === 0 ? 'Ajoutez au moins une étape.' : !c.exempt && c.steps.some((s) => s.kind === 'employee' && !s.employeeId) ? 'Choisissez la personne de chaque étape nommée.' : undefined;
+  const dateError = !c.effectiveDate ? 'Date d’effet requise.' : undefined;
+  const stepError = c.steps.length === 0 ? 'Ajoutez au moins un niveau.'
+    : c.steps.some((s) => !approverValue(s)) ? 'Choisissez l’approbateur de chaque niveau.'
+    : c.steps.some((s) => !s.label.trim()) ? 'Renseignez le rôle / libellé de chaque niveau.'
+    : c.steps.every((s) => s.intervention === 'consultation') ? 'Au moins un niveau doit exiger une approbation.' : undefined;
 
   const save = () => {
     setSubmitted(true);
-    if (nameError || depError || stepError) return;
-    onSave({ ...c, name: c.name.trim(), steps: c.exempt ? [] : c.steps });
+    if (nameError || depError || dateError || stepError) return;
+    onSave({ ...c, name: c.name.trim(), exempt: false, steps: c.steps.map((s) => ({ ...s, label: s.label.trim(), intervention: s.intervention ?? 'approbation' })) });
   };
 
   return (
-    <Drawer open onClose={onClose} title={circuit.id ? `Modifier « ${circuit.name} »` : 'Nouveau circuit'} subtitle="Affecté à un département ; de 1 à 5 approbateurs, dans l’ordre de validation."
-      footer={<><span className="spacer" /><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" onClick={save}><Save size={15} aria-hidden /> Enregistrer</button></>}>
-      <div className="stack">
-        <Field label="Nom" required error={submitted ? nameError : undefined}>{(id) => <input id={id} value={c.name} onChange={(e) => setC({ ...c, name: e.target.value })} />}</Field>
-        <Field label="Département" required error={submitted ? depError : undefined} hint="Ses sous-départements héritent du circuit.">
-          {(id) => (
-            <select id={id} value={c.departmentId ?? ''} onChange={(e) => setC({ ...c, departmentId: e.target.value || undefined })}>
+    <Drawer open onClose={onClose} wide title={circuit.id ? `Modifier « ${circuit.name} »` : 'Nouveau circuit d’approbation'}
+      subtitle="Paliers ordonnés et rattachement exclusif au département. Chaque niveau est notifié de la demande."
+      footer={<><span className="spacer" /><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" onClick={save}><Save size={15} aria-hidden /> {circuit.id ? 'Enregistrer' : 'Créer le circuit'}</button></>}>
+      <div className="fstack">
+        <section className="ci-block">
+          <div className="ci-grid">
+            <Field label="Nom du circuit" required error={submitted ? nameError : undefined}>
+              {(id) => <input id={id} value={c.name} placeholder="Ex. : Circuit Direction Logistique" onChange={(e) => setC({ ...c, name: e.target.value })} />}
+            </Field>
+            <Field label="Date d’effet de la version" required error={submitted ? dateError : undefined}>
+              {(id) => <input id={id} type="date" value={c.effectiveDate ?? ''} onChange={(e) => setC({ ...c, effectiveDate: e.target.value || undefined })} />}
+            </Field>
+          </div>
+          <div className="ci-dep field">
+            <div className="ci-dep-head">
+              <label htmlFor="ci-dep">Département affecté (exclusif) <span className="req" aria-hidden>*</span></label>
+              <Badge tone="info">1 circuit = 1 département</Badge>
+            </div>
+            <select id="ci-dep" value={c.departmentId ?? ''} onChange={(e) => setC({ ...c, departmentId: e.target.value || undefined })}>
               <option value="">Sélectionner…</option>
-              {data.activeDepartments.map((d) => {
-                const other = data.circuits.find((x) => x.id !== c.id && !x.archived && x.departmentId === d.id);
-                return <option key={d.id} value={d.id}>{d.name}{other ? ` — remplace « ${other.name} »` : ''}</option>;
-              })}
+              {data.activeDepartments.filter((d) => !d.parentId).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
             </select>
-          )}
-        </Field>
-        {current && <Alert tone="warning" title="Remplacement">« {current.name} » est le circuit actuel de ce département : il sera archivé à l’enregistrement.</Alert>}
-        {leaving && <Alert tone="warning" title="Département sans circuit">« {leaving.name} » n’aura plus de circuit : affectez-lui-en un autre pour y créer ou muter des employés.</Alert>}
-        <Field label="Description">{(id) => <input id={id} value={c.description} onChange={(e) => setC({ ...c, description: e.target.value })} />}</Field>
-        <Switch checked={c.exempt} onChange={(v) => setC({ ...c, exempt: v })} label="Profil dispensé d’approbation" />
-        {c.exempt ? (
-          <Alert tone="success" title="Validation automatique">Les demandes des employés du département seront approuvées dès l’envoi et tracées dans l’historique.</Alert>
-        ) : (
-          <>
-            <ol className="step-editor">
-              {c.steps.map((s, i) => (
-                <li key={i}>
-                  <span className="step-num">{i + 1}</span>
-                  <div className="step-fields">
-                    <label className="sr-only" htmlFor={`kind-${i}`}>Type d’approbateur, étape {i + 1}</label>
-                    <select id={`kind-${i}`} value={s.kind} onChange={(e) => { const kind = e.target.value as CircuitStepKind; setStep(i, { kind, label: KIND_LABEL[kind], employeeId: undefined }); }}>
-                      {(Object.keys(KIND_LABEL) as CircuitStepKind[]).map((k) => <option key={k} value={k}>{KIND_LABEL[k]}</option>)}
-                    </select>
-                    {s.kind === 'employee' && (
-                      <>
-                        <label className="sr-only" htmlFor={`emp-${i}`}>Personne, étape {i + 1}</label>
-                        <select id={`emp-${i}`} value={s.employeeId ?? ''} onChange={(e) => { const p = data.person(e.target.value); setStep(i, { employeeId: e.target.value, label: p?.functionName ?? 'Personne nommée' }); }}>
-                          <option value="">Choisir…</option>
-                          {people.map((p) => <option key={p.id} value={p.id}>{p.firstName} {p.lastName} — {p.functionName}</option>)}
-                        </select>
-                      </>
-                    )}
-                  </div>
-                  <button type="button" className="icon-btn" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Monter l’étape ${i + 1}`}><ArrowUp size={16} /></button>
-                  <button type="button" className="icon-btn" disabled={i === c.steps.length - 1} onClick={() => move(i, 1)} aria-label={`Descendre l’étape ${i + 1}`}><ArrowDown size={16} /></button>
-                  <button type="button" className="icon-btn icon-btn-danger" onClick={() => setC((x) => ({ ...x, steps: x.steps.filter((_, j) => j !== i) }))} aria-label={`Supprimer l’étape ${i + 1}`}><Trash2 size={16} /></button>
-                </li>
-              ))}
-            </ol>
-            {submitted && stepError && <p className="field-error">{stepError}</p>}
-            <button type="button" className="btn btn-ghost" disabled={c.steps.length >= 5}
-              onClick={() => setC((x) => ({ ...x, steps: [...x.steps, { kind: 'employee', label: KIND_LABEL.employee }] }))}>
-              <Plus size={15} aria-hidden /> Ajouter une étape {c.steps.length >= 5 && '(maximum atteint)'}
+            {submitted && depError ? <p className="field-error">{depError}</p> : (
+              <p className="ci-hint"><Info size={12} aria-hidden /> Tous les employés {subs.length ? `et les ${subs.length} sous-département${subs.length > 1 ? 's' : ''} ` : ''}de ce département utiliseront automatiquement ce circuit.</p>
+            )}
+          </div>
+          {current && <Alert tone="warning" title="Remplacement">« {current.name} » est le circuit actuel de ce département : il sera archivé à l’enregistrement.</Alert>}
+          {leaving && <Alert tone="warning" title="Département sans circuit">« {leaving.name} » n’aura plus de circuit : affectez-lui-en un autre pour y créer ou muter des employés.</Alert>}
+        </section>
+
+        <section className="ci-block">
+          <div className="ci-steps-head">
+            <div>
+              <p className="ci-title"><ListChecks size={15} aria-hidden /> Chaîne ordonnée des niveaux d’approbation</p>
+              <p className="small text-muted">Du niveau le plus bas au plus haut : un libellé, un approbateur et un type d’intervention par niveau (5 au maximum).</p>
+            </div>
+            <button type="button" className="btn btn-sm btn-ghost" disabled={c.steps.length >= 5}
+              onClick={() => setC((x) => ({ ...x, steps: [...x.steps, { kind: 'employee', label: '', intervention: 'approbation' }] }))}>
+              <Plus size={14} aria-hidden /> Ajouter un niveau supérieur
             </button>
-          </>
-        )}
+          </div>
+          <div className="ci-table" role="table" aria-label="Niveaux d’approbation">
+            <div className="ci-row ci-row-head" role="row">
+              <span role="columnheader">Palier</span><span role="columnheader">Rôle / libellé</span><span role="columnheader">Approbateur désigné</span><span role="columnheader">Type d’intervention</span><span role="columnheader"><span className="sr-only">Actions</span></span>
+            </div>
+            {c.steps.map((s, i) => (
+              <div key={i} className={`ci-row ${s.intervention === 'consultation' ? 'is-consult' : ''}`} role="row">
+                <span role="cell"><span className="ci-level">Niveau {i + 1}</span></span>
+                <span role="cell">
+                  <label className="sr-only" htmlFor={`ci-label-${i}`}>Rôle, niveau {i + 1}</label>
+                  <input id={`ci-label-${i}`} value={s.label} placeholder="Ex. : DRH société" onChange={(e) => setStep(i, { label: e.target.value })} />
+                </span>
+                <span role="cell">
+                  <label className="sr-only" htmlFor={`ci-appr-${i}`}>Approbateur, niveau {i + 1}</label>
+                  <select id={`ci-appr-${i}`} value={approverValue(s)} onChange={(e) => setApprover(i, e.target.value)}>
+                    <option value="">Choisir l’approbateur…</option>
+                    <optgroup label="Selon le demandeur">
+                      <option value="manager">Manager direct (N+1) du demandeur</option>
+                      <option value="departmentHead">Responsable du département du demandeur</option>
+                    </optgroup>
+                    <optgroup label="Personne nommée">
+                      {people.map((p) => <option key={p.id} value={`emp:${p.id}`}>{p.firstName} {p.lastName} ({p.matricule} · {p.functionName})</option>)}
+                    </optgroup>
+                  </select>
+                </span>
+                <span role="cell">
+                  <label className="sr-only" htmlFor={`ci-int-${i}`}>Type d’intervention, niveau {i + 1}</label>
+                  <select id={`ci-int-${i}`} value={s.intervention ?? 'approbation'} onChange={(e) => setStep(i, { intervention: e.target.value as CircuitIntervention })}>
+                    {(Object.keys(INTERVENTION) as CircuitIntervention[]).map((k) => <option key={k} value={k}>{INTERVENTION[k]}</option>)}
+                  </select>
+                </span>
+                <span role="cell" className="ci-actions">
+                  <button type="button" className="icon-btn icon-btn-sm" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Monter le niveau ${i + 1}`}><ArrowUp size={14} /></button>
+                  <button type="button" className="icon-btn icon-btn-sm" disabled={i === c.steps.length - 1} onClick={() => move(i, 1)} aria-label={`Descendre le niveau ${i + 1}`}><ArrowDown size={14} /></button>
+                  <button type="button" className="icon-btn icon-btn-sm icon-btn-danger" onClick={() => setC((x) => ({ ...x, steps: x.steps.filter((_, j) => j !== i) }))} aria-label={`Supprimer le niveau ${i + 1}`}><Trash2 size={14} /></button>
+                </span>
+              </div>
+            ))}
+          </div>
+          {submitted && stepError && <p className="field-error mt-8">{stepError}</p>}
+          <p className="ci-hint mt-8"><Bell size={12} aria-hidden /> Chaque niveau reçoit une notification. Un niveau en consultation est informé sans bloquer la demande.</p>
+        </section>
       </div>
     </Drawer>
   );

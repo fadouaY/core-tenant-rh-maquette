@@ -1,12 +1,12 @@
 // Contrats de l'employé (RH-7) : parcours complet, contrat en vigueur et état de chaque contrat.
-import type { ContractKind, ContractType, Employee, EmployeeContract, ISODate } from '../types';
+import type { ContractKind, ContractPolicy, ContractTypeDef, Employee, EmployeeContract, ISODate } from '../types';
 import { TODAY } from './dates';
 
-export const CONTRACT_TYPE_LABEL: Record<ContractType, string> = {
-  CDI: 'Contrat à durée indéterminée',
-  CDD: 'Contrat à durée déterminée',
-  Stage: 'Convention de stage',
-};
+/** Type de contrat du catalogue de la société, d'après son code. */
+export const contractTypeDef = (types: ContractTypeDef[], code: string) => types.find((t) => t.code === code);
+export const contractTypeName = (types: ContractTypeDef[], code: string) => contractTypeDef(types, code)?.name ?? code;
+/** À durée déterminée : une date de fin est exigée (repli : tout sauf le CDI). */
+export const isFixedTerm = (types: ContractTypeDef[], code: string) => contractTypeDef(types, code)?.fixedTerm ?? code !== 'CDI';
 
 export const CONTRACT_KIND_LABEL: Record<ContractKind, string> = {
   initial: 'Contrat initial',
@@ -57,4 +57,26 @@ export function activeContract(list: EmployeeContract[], today: ISODate = TODAY)
 export function overlappingContract(list: EmployeeContract[], start: ISODate, end: ISODate | undefined, exceptId?: string) {
   const far = '9999-12-31';
   return list.find((c) => c.id !== exceptId && c.start <= (end ?? far) && (effectiveEnd(c) ?? far) >= start);
+}
+
+/** Fin de période d'essai : veille du même jour, N mois après le début (ex. 1 mois depuis le 15/01 → 14/02). */
+export function trialEndOf(start: ISODate, months: number): ISODate {
+  const [y, m, d] = start.split('-').map(Number);
+  const target = new Date(Date.UTC(y, m - 1 + months, 1));
+  const last = new Date(Date.UTC(target.getUTCFullYear(), target.getUTCMonth() + 1, 0)).getUTCDate();
+  target.setUTCDate(Math.min(d, last));
+  target.setUTCDate(target.getUTCDate() - 1);
+  return target.toISOString().slice(0, 10);
+}
+
+/** Délai d'alerte avant l'échéance d'un contrat (30 jours par défaut). */
+export const expiryAlertDays = (policies: ContractPolicy[], companyId: string) => policies.find((p) => p.companyId === companyId)?.expiryAlertDays ?? 30;
+
+/** Contrats en cours dont l'échéance tombe dans le délai d'alerte, du plus proche au plus lointain. */
+export function expiringContracts(employees: Employee[], days: number, today: ISODate = TODAY) {
+  return employees.filter((e) => e.status !== 'inactif').flatMap((e) => contractsOf(e)
+    .filter((c) => contractStatus(c, today) === 'actif' && effectiveEnd(c))
+    .map((c) => ({ employee: e, contract: c, left: Math.round((Date.parse(effectiveEnd(c)!) - Date.parse(today)) / 86400000) }))
+    .filter((x) => x.left >= 0 && x.left <= days))
+    .sort((a, b) => a.left - b.left);
 }

@@ -26,6 +26,7 @@ export function DocumentTypesSection() {
           { header: 'Code', render: (t) => <span className="mono">{t.code}</span> },
           { header: 'Obligatoire', render: (t) => (t.required ? <Badge tone="warning">Obligatoire</Badge> : <Badge tone="neutral">Facultatif</Badge>) },
           { header: 'Formats acceptés', render: (t) => <span className="small mono">{t.formats.map((f) => f.toUpperCase()).join(' · ')}</span> },
+          { header: 'Taille max.', render: (t) => (t.maxSizeMb ? `${t.maxSizeMb.toLocaleString('fr-FR')} Mo` : <span className="text-muted">Sans limite</span>) },
         ]}
       />
       <DocumentTypeModal state={editing} onClose={() => setEditing(undefined)} />
@@ -37,12 +38,12 @@ function DocumentTypeModal({ state, onClose }: { state?: { type?: DocumentType }
   const { companyId, addItem, updateItem, toast } = useStore();
   const data = useCompanyData();
   const type = state?.type;
-  const [f, setF] = useState({ name: '', code: '', required: false, formats: ['pdf'] as DocumentFormat[] });
+  const [f, setF] = useState({ name: '', code: '', required: false, formats: ['pdf'] as DocumentFormat[], maxSizeMb: '' });
   const [submitted, setSubmitted] = useState(false);
   useEffect(() => {
     if (!state) return;
     setSubmitted(false);
-    setF({ name: type?.name ?? '', code: type?.code ?? '', required: type?.required ?? false, formats: type?.formats ?? ['pdf'] });
+    setF({ name: type?.name ?? '', code: type?.code ?? '', required: type?.required ?? false, formats: type?.formats ?? ['pdf'], maxSizeMb: type?.maxSizeMb ? String(type.maxSizeMb) : '5' });
   }, [state, type]);
   if (!state) return null;
 
@@ -53,6 +54,7 @@ function DocumentTypeModal({ state, onClose }: { state?: { type?: DocumentType }
   else if (others.some((t) => t.name.trim().toLowerCase() === f.name.trim().toLowerCase())) errors.name = 'Ce type existe déjà dans la société.';
   if (code && others.some((t) => t.code.toUpperCase() === code)) errors.code = 'Ce code est déjà utilisé dans la société.';
   if (f.formats.length === 0) errors.formats = 'Choisissez au moins un format.';
+  if (f.maxSizeMb && !(Number(f.maxSizeMb) > 0 && Number(f.maxSizeMb) <= 100)) errors.maxSizeMb = 'Entre 0,1 et 100 Mo.';
   const err = (k: string) => (submitted ? errors[k] : undefined);
 
   const toggleFormat = (fmt: DocumentFormat, on: boolean) =>
@@ -61,7 +63,7 @@ function DocumentTypeModal({ state, onClose }: { state?: { type?: DocumentType }
   const save = () => {
     setSubmitted(true);
     if (Object.keys(errors).length) return;
-    const saved: DocumentType = { ...(type ?? { id: newId('dt'), companyId }), name: f.name.trim(), code, required: f.required, formats: f.formats };
+    const saved: DocumentType = { ...(type ?? { id: newId('dt'), companyId }), name: f.name.trim(), code, required: f.required, formats: f.formats, maxSizeMb: f.maxSizeMb ? Number(f.maxSizeMb) : undefined };
     if (type) updateItem('documentTypes', saved); else addItem('documentTypes', saved);
     toast(`Type de document « ${saved.name} » ${type ? 'mis à jour' : 'ajouté'}`);
     onClose();
@@ -73,6 +75,9 @@ function DocumentTypeModal({ state, onClose }: { state?: { type?: DocumentType }
       <div className="form-grid">
         <Field label="Intitulé" required error={err('name')} className="span-2">{(id) => <input id={id} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Ex. : Carte d’identité nationale" />}</Field>
         <Field label="Code" error={err('code')} hint="Facultatif : déduit de l’intitulé.">{(id) => <input id={id} value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} placeholder="CIN" />}</Field>
+        <Field label="Taille maximale (Mo)" error={err('maxSizeMb')} hint="Vide = sans limite.">
+          {(id) => <span className="input-suffix"><input id={id} type="number" min={0.1} max={100} step={0.5} value={f.maxSizeMb} onChange={(e) => setF({ ...f, maxSizeMb: e.target.value })} /><span aria-hidden>Mo</span></span>}
+        </Field>
       </div>
       <div className="mt-12">
         <Switch checked={f.required} onChange={(v) => setF({ ...f, required: v })} label="Document obligatoire dans chaque dossier employé" />

@@ -1,7 +1,7 @@
 // Autorisations d'absence en heures : décompte d'après les créneaux de l'horaire de l'employé.
 // Une journée de solde vaut la durée de travail d'une journée de son horaire (ex. 09:00–12:30 + 14:00–18:00 = 7 h 30).
 import type { Database, ID, ISODate, LeaveRequest, Schedule, TimeSlot } from '../types';
-import { TODAY } from './dates';
+import { isoWeekday, TODAY } from './dates';
 import { isWorkingDay, scheduleOn } from './org';
 import { profileOf } from './leave';
 
@@ -13,10 +13,33 @@ export function scheduleOf(db: Database, employeeId: ID, date: ISODate = TODAY):
   return employee ? scheduleOn(db, employee, date).schedule : undefined;
 }
 
-/** Durée de travail d'une journée (en heures) selon les créneaux de l'horaire. */
-export function dayHours(schedule?: Pick<Schedule, 'slots'>): number {
-  const min = (schedule?.slots ?? []).reduce((sum, s) => sum + Math.max(0, toMinutes(s.end) - toMinutes(s.start)), 0);
-  return min > 0 ? min / 60 : 8;
+/** Durée d'un créneau en minutes ; un créneau de nuit (fin avant début) traverse minuit. */
+export const slotMinutes = (s: TimeSlot) => { const d = toMinutes(s.end) - toMinutes(s.start); return d > 0 ? d : d + 24 * 60; };
+
+/** Jours où un créneau s'applique : les siens, sinon les jours travaillés du scénario. */
+export const slotDays = (schedule: Pick<Schedule, 'workDays'>, slot: TimeSlot) => slot.days ?? schedule.workDays;
+
+/** Créneaux d'un jour de la semaine (1 = lundi … 7 = dimanche). */
+export const slotsOn = (schedule: Pick<Schedule, 'slots' | 'workDays'>, weekday: number) =>
+  schedule.slots.filter((s) => slotDays(schedule, s).includes(weekday));
+
+/** Jours travaillés d'un scénario : ceux couverts par au moins un créneau. */
+export const scheduleDays = (schedule: Pick<Schedule, 'slots' | 'workDays'>) =>
+  [...new Set(schedule.slots.flatMap((s) => slotDays(schedule, s)))].sort();
+
+/** Volume hebdomadaire calculé d'après les créneaux et leurs jours (en heures). */
+export const weeklyMinutes = (schedule: Pick<Schedule, 'slots' | 'workDays'>) =>
+  schedule.slots.reduce((sum, s) => sum + slotMinutes(s) * slotDays(schedule, s).length, 0);
+
+/**
+ * Durée de travail d'une journée (en heures) : celle du jour indiqué, sinon la moyenne d'un jour travaillé
+ * (sert à convertir heures et jours de solde). 8 h par défaut sans horaire.
+ */
+export function dayHours(schedule?: Pick<Schedule, 'slots' | 'workDays'>, weekday?: number): number {
+  if (!schedule || schedule.slots.length === 0) return 8;
+  if (weekday) return slotsOn(schedule, weekday).reduce((sum, s) => sum + slotMinutes(s), 0) / 60;
+  const days = scheduleDays(schedule).length;
+  return days ? weeklyMinutes(schedule) / days / 60 : 8;
 }
 
 export interface AuthorizationCount {
@@ -34,8 +57,8 @@ export interface AuthorizationCount {
 
 export function countAuthorization(db: Database, employeeId: ID, date: ISODate, from: string, to: string): AuthorizationCount {
   const schedule = scheduleOf(db, employeeId, date);
-  const slots = schedule?.slots ?? [];
-  const perDay = dayHours(schedule);
+  const slots = schedule && date ? slotsOn(schedule, isoWeekday(date)) : schedule?.slots ?? [];
+  const perDay = (schedule && date ? dayHours(schedule, isoWeekday(date)) : 0) || dayHours(schedule);
   const base: AuthorizationCount = { hours: 0, days: 0, dayHours: perDay, workingDay: false, outsideMinutes: 0, slots };
   if (!date || !from || !to || toMinutes(to) <= toMinutes(from)) return base;
   const companyId = profileOf(db, employeeId)?.companyId;
@@ -110,4 +133,16 @@ export function nextWorkingDay(db: Database, employeeId: ID, from: ISODate): ISO
     d.setDate(d.getDate() + 1);
   }
   return from;
+}
+
+/** Journées types d'un scénario : créneaux regroupés par jeu de jours identique, du lundi au dimanche. */
+export function scheduleDayTypes(schedule: Pick<Schedule, 'slots' | 'workDays'>) {
+  const map = new Map<string, { days: number[]; slots: TimeSlot[] }>();
+  for (const slot of schedule.slots) {
+    const days = [...slotDays(schedule, slot)].sort();
+    const key = days.join(',');
+    if (!map.has(key)) map.set(key, { days, slots: [] });
+    map.get(key)!.slots.push(slot);
+  }
+  return [...map.values()].sort((a, b) => (a.days[0] ?? 9) - (b.days[0] ?? 9));
 }

@@ -1,11 +1,12 @@
 // Paramètres d'organisation : départements et sous-départements (RH-14), fonctions.
 import { useEffect, useState } from 'react';
-import { CornerDownRight, Pencil, Plus, UserRound, Users } from 'lucide-react';
+import { Clock, CornerDownRight, Hash, Link2, Lock, Pencil, Plus, UserRound, Users } from 'lucide-react';
 import { newId, useCompanyData, useStore } from '../../store';
 import { Alert, ArchivedBadge, Avatar, Badge, Field, Modal, PersonCell, Switch } from '../../components/ui';
-import type { Department, JobFunction } from '../../types';
+import type { Department, JobFunction, Schedule } from '../../types';
 import { ArchivableTable } from '../../components/settingsKit';
-import { circuitForDepartment } from '../../utils/org';
+import { circuitForDepartment, codeForName } from '../../utils/org';
+import { dayHours } from '../../utils/hours';
 
 /** Départements et sous-départements (RH-14) : responsable, horaire organisationnel, circuit obligatoire. */
 export function DepartmentsSection() {
@@ -51,9 +52,9 @@ export function DepartmentsSection() {
           { header: 'Responsable', render: (d) => <PersonCell employee={data.employee(d.headId)} /> },
           { header: 'Horaire', render: (d) => {
             const own = data.schedule(d.scheduleId);
-            if (own) return <span className="small">{own.name}</span>;
+            if (own) return <span className="small">{own.name}<span className="block sched-mini">{scheduleSummary(own)}</span></span>;
             const parent = data.schedule(data.department(d.parentId)?.scheduleId);
-            return d.parentId && parent ? <span className="small text-muted">Hérité : {parent.name}</span> : <Badge tone="warning">Aucun</Badge>;
+            return d.parentId && parent ? <span className="small text-muted">Hérité : {parent.name}<span className="block sched-mini">{scheduleSummary(parent)}</span></span> : <Badge tone="warning">Aucun</Badge>;
           } },
           { header: 'Circuit', render: (d) => {
             const c = circuitForDepartment(db, d.id);
@@ -68,26 +69,40 @@ export function DepartmentsSection() {
   );
 }
 
+/** Résumé d'un horaire : volume hebdomadaire, jours travaillés et créneaux. */
+export function scheduleSummary(s: Schedule) {
+  const perDay = dayHours(s);
+  const weekly = s.weeklyHours ?? Math.round(perDay * s.workDays.length * 10) / 10;
+  return `${weekly.toLocaleString('fr-FR')} h / sem. · ${s.workDays.length} j · ${s.slots.map((x) => `${x.start}–${x.end}`).join(', ')}`;
+}
+
 function DepartmentModal({ state, onClose }: { state?: { dep?: Department; parentId?: string }; onClose: () => void }) {
-  const { companyId, addItem, updateItem, toast } = useStore();
+  const { db, companyId, addItem, updateItem, toast } = useStore();
   const data = useCompanyData();
   const dep = state?.dep;
-  const [f, setF] = useState({ name: '', code: '', headId: '', parentId: '', scheduleId: '' });
+  const [f, setF] = useState({ name: '', code: '', headId: '', sub: false, parentId: '', scheduleId: '' });
   const [submitted, setSubmitted] = useState(false);
   useEffect(() => {
     if (!state) return;
     setSubmitted(false);
-    setF({ name: dep?.name ?? '', code: dep?.code ?? '', headId: dep?.headId ?? '', parentId: dep?.parentId ?? state.parentId ?? '', scheduleId: dep?.scheduleId ?? '' });
+    const parentId = dep?.parentId ?? state.parentId ?? '';
+    setF({ name: dep?.name ?? '', code: dep?.code ?? '', headId: dep?.headId ?? '', sub: !!parentId, parentId, scheduleId: dep?.scheduleId ?? '' });
   }, [state, dep]);
   if (!state) return null;
 
-  const isSub = !!f.parentId;
+  const isSub = f.sub;
   const hasSubs = !!dep && data.subDepartments(dep.id).length > 0;
-  const siblings = isSub ? data.subDepartments(f.parentId) : data.departments;
+  const siblings = isSub ? data.subDepartments(f.parentId) : data.departments.filter((d) => !d.parentId);
+  // Création : code proposé d'après le nom (préfixe + premières lettres, Paramètres › Numéro de souche).
+  const code = (dep ? f.code : codeForName(db, companyId, 'departement', f.name)).trim().toUpperCase();
+  const schedule = data.schedule(f.scheduleId);
+  const parentSchedule = isSub ? data.schedule(data.department(f.parentId)?.scheduleId) : undefined;
   const errors: Record<string, string> = {};
   if (!f.name.trim()) errors.name = 'Nom requis.';
   else if (siblings.some((d) => d.id !== dep?.id && d.name.trim().toLowerCase() === f.name.trim().toLowerCase())) errors.name = 'Ce nom existe déjà à ce niveau.';
-  if (!f.code.trim()) errors.code = 'Code requis.';
+  if (!code) errors.code = dep ? 'Code requis.' : 'Saisissez le nom : le code en est déduit.';
+  else if (data.departments.some((d) => d.id !== dep?.id && d.code.toUpperCase() === code)) errors.code = 'Ce code est déjà utilisé.';
+  if (isSub && !f.parentId) errors.parentId = 'Choisissez le département parent.';
   if (!isSub && !f.scheduleId) errors.scheduleId = 'Un département doit avoir un horaire organisationnel.';
   const err = (k: string) => (submitted ? errors[k] : undefined);
 
@@ -96,27 +111,38 @@ function DepartmentModal({ state, onClose }: { state?: { dep?: Department; paren
     if (Object.keys(errors).length) return;
     const saved: Department = {
       ...(dep ?? { id: newId('d'), companyId }),
-      name: f.name.trim(), code: f.code.trim().toUpperCase(), headId: f.headId || undefined,
-      parentId: f.parentId || undefined, scheduleId: f.scheduleId || undefined,
+      name: f.name.trim(), code, headId: f.headId || undefined,
+      parentId: isSub ? f.parentId : undefined, scheduleId: f.scheduleId || undefined,
     };
     if (dep) updateItem('departments', saved); else addItem('departments', saved);
-    toast(`${isSub ? 'Sous-département' : 'Département'} « ${saved.name} » ${dep ? 'mis à jour' : 'ajouté'}`);
+    toast(`${isSub ? 'Sous-département' : 'Département'} « ${saved.name} » ${dep ? 'mis à jour' : 'ajouté'} — code ${code}`);
     onClose();
   };
 
   return (
     <Modal open onClose={onClose} title={dep ? `Modifier « ${dep.name} »` : isSub ? 'Nouveau sous-département' : 'Nouveau département'}
       footer={<><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" onClick={save}>{dep ? 'Enregistrer' : 'Ajouter'}</button></>}>
-      <div className="form-grid">
-        <Field label="Nom" required error={err('name')}>{(id) => <input id={id} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Ex. : Marketing" />}</Field>
-        <Field label="Code" required error={err('code')}>{(id) => <input id={id} value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} placeholder="MKT" />}</Field>
-        <Field label="Département parent" hint={hasSubs ? 'Ce département a des sous-départements : il reste de premier niveau.' : 'Laisser vide pour un département de premier niveau.'}>
-          {(id) => (
-            <select id={id} value={f.parentId} disabled={hasSubs || !!dep} onChange={(e) => setF({ ...f, parentId: e.target.value })}>
-              <option value="">Aucun (département)</option>
-              {data.activeDepartments.filter((d) => d.id !== dep?.id).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
-            </select>
-          )}
+      <label className={`dep-sub-toggle ${isSub ? 'on' : ''} ${hasSubs || dep ? 'disabled' : ''}`} title={dep ? 'Le niveau ne se modifie pas après la création.' : 'Rattacher cette entité à un département existant.'}>
+        <input type="checkbox" checked={isSub} disabled={hasSubs || !!dep} onChange={(e) => setF({ ...f, sub: e.target.checked, parentId: e.target.checked ? f.parentId : '' })} />
+        <CornerDownRight size={13} aria-hidden />
+        <span>Sous-département</span>
+      </label>
+      <div className="form-grid mt-12">
+        {isSub && (
+          <Field label="Département parent" required error={err('parentId')} className="span-2">
+            {(id) => (
+              <select id={id} value={f.parentId} disabled={!!dep} onChange={(e) => setF({ ...f, parentId: e.target.value })}>
+                <option value="">Sélectionner le département parent…</option>
+                {data.activeDepartments.filter((d) => d.id !== dep?.id && !d.parentId).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+              </select>
+            )}
+          </Field>
+        )}
+        <Field label="Nom" required error={err('name')}>{(id) => <input id={id} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Ex. : Financier" />}</Field>
+        <Field label="Code" required error={err('code')} hint={dep ? 'Unique dans la société.' : 'Déduit du nom (Paramètres › Numéro de souche).'}>
+          {(id) => dep
+            ? <input id={id} value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />
+            : <span className="input-locked"><Hash size={13} aria-hidden /><input id={id} value={code} readOnly aria-readonly placeholder="—" /><Lock size={12} aria-hidden /></span>}
         </Field>
         <Field label="Responsable">
           {(id) => (
@@ -126,16 +152,19 @@ function DepartmentModal({ state, onClose }: { state?: { dep?: Department; paren
             </select>
           )}
         </Field>
-        <Field label="Horaire organisationnel" required={!isSub} error={err('scheduleId')} className="span-2"
+        <Field label="Horaire organisationnel" required={!isSub} error={err('scheduleId')}
           hint={isSub ? 'Facultatif : sans horaire propre, le sous-département hérite de celui de son département.' : 'Appliqué aux employés en mode organisationnel.'}>
           {(id) => (
             <select id={id} value={f.scheduleId} onChange={(e) => setF({ ...f, scheduleId: e.target.value })}>
               <option value="">{isSub ? 'Hériter du département' : 'Sélectionner…'}</option>
-              {data.schedules.filter((s) => !s.archived || s.id === f.scheduleId).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+              {data.schedules.filter((s) => !s.archived || s.id === f.scheduleId).map((s) => <option key={s.id} value={s.id}>{s.name} — {scheduleSummary(s)}</option>)}
             </select>
           )}
         </Field>
       </div>
+      {(schedule || parentSchedule) && (
+        <p className="dep-sched"><Clock size={13} aria-hidden /> <strong>{(schedule ?? parentSchedule)!.name}</strong>{!schedule && ' (hérité)'} · {scheduleSummary((schedule ?? parentSchedule)!)}</p>
+      )}
       {!isSub && !dep && <p className="small text-muted mt-12">Affectez ensuite un circuit d’approbation à ce département (Paramètres › Circuits d’approbation) : la création d’employés y est bloquée sans circuit.</p>}
     </Modal>
   );
@@ -156,6 +185,7 @@ export function FunctionsSection() {
           <button type="button" className="btn btn-sm btn-ghost" onClick={() => setEditing({ fn: f })} aria-label={`Modifier ${f.name}`}><Pencil size={13} aria-hidden /> Modifier</button>
         )}
         columns={[
+          { header: 'Code', render: (f) => <span className="mono">{f.code ?? '—'}</span> },
           { header: 'Fonction', render: (f) => <span className="person-name">{f.name}</span> },
           { header: 'Intérim', render: (f) => (f.interim ? <FunctionKindBadge kind={f.kind} /> : <span className="text-muted small">Sans règle</span>) },
           { header: 'Département', render: (f) => <>{data.department(f.departmentId)?.name ?? 'Transverse'} {data.department(f.departmentId)?.archived && <ArchivedBadge />}</> },
@@ -186,30 +216,52 @@ export function FunctionKindBadge({ kind }: { kind: JobFunction['kind'] }) {
 }
 
 function FunctionModal({ state, onClose }: { state?: { fn?: JobFunction }; onClose: () => void }) {
-  const { companyId, addItem, updateItem, toast } = useStore();
+  const { db, companyId, addItem, updateItem, setArchived, toast } = useStore();
   const data = useCompanyData();
   const fn = state?.fn;
-  const [f, setF] = useState({ name: '', departmentId: '', interim: false, kind: 'solo' as JobFunction['kind'], minPresent: '' });
+  const [f, setF] = useState({ name: '', code: '', departmentId: '', interim: false, kind: 'solo' as JobFunction['kind'], minPresent: '', linkTo: '' });
   const [submitted, setSubmitted] = useState(false);
   useEffect(() => {
     if (!state) return;
     setSubmitted(false);
-    setF({ name: fn?.name ?? '', departmentId: fn?.departmentId ?? (data.activeDepartments[0]?.id ?? ''), interim: fn?.interim ?? false, kind: fn?.kind ?? 'solo', minPresent: fn?.minPresent != null ? String(fn.minPresent) : '' });
+    const linked = fn ? data.functionLinks.find((l) => !l.archived && l.functionIds.includes(fn.id))?.functionIds.find((x) => x !== fn.id) ?? '' : '';
+    setF({ name: fn?.name ?? '', code: fn?.code ?? '', departmentId: fn?.departmentId ?? (data.activeDepartments[0]?.id ?? ''), interim: fn?.interim ?? false, kind: fn?.kind ?? 'solo', minPresent: fn?.minPresent != null ? String(fn.minPresent) : '', linkTo: linked });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [state]);
   if (!state) return null;
 
   const count = fn ? data.employees.filter((e) => e.functionId === fn.id && e.status !== 'inactif').length : 0;
+  // Création : code proposé d'après l'intitulé (préfixe + premières lettres, Paramètres › Numéro de souche).
+  const code = (fn ? f.code : codeForName(db, companyId, 'fonction', f.name)).trim().toUpperCase();
   const nameError = !f.name.trim() ? 'Intitulé requis.' : '';
+  const codeError = code && data.functions.some((x) => x.id !== fn?.id && (x.code ?? '').toUpperCase() === code) ? 'Ce code est déjà utilisé.' : '';
+  // Fonctions solo (intérim) configurées, avec lesquelles celle-ci peut être liée pour la suppléance.
+  const soloFns = data.functions.filter((x) => !x.archived && x.id !== fn?.id && x.interim && x.kind === 'solo');
+
+  /** Liaison de suppléance : rejoint la liaison existante de la fonction choisie, ou en crée une. */
+  const syncLink = (saved: JobFunction) => {
+    const target = saved.interim && saved.kind === 'solo' ? f.linkTo : '';
+    for (const l of data.functionLinks.filter((x) => !x.archived && x.functionIds.includes(saved.id) && !x.functionIds.includes(target))) {
+      const ids = l.functionIds.filter((x) => x !== saved.id);
+      updateItem('functionLinks', { ...l, functionIds: ids });
+      if (ids.length < 2) setArchived('functionLinks', l.id, true);
+    }
+    if (!target || data.functionLinks.some((x) => !x.archived && x.functionIds.includes(saved.id) && x.functionIds.includes(target))) return;
+    const existing = data.functionLinks.find((x) => !x.archived && x.functionIds.includes(target));
+    if (existing) updateItem('functionLinks', { ...existing, functionIds: [...existing.functionIds, saved.id] });
+    else addItem('functionLinks', { id: newId('fl'), companyId, name: `${data.fn(target)?.name} ↔ ${saved.name}`, functionIds: [target, saved.id] });
+  };
   const save = () => {
     setSubmitted(true);
-    if (nameError) return;
+    if (nameError || codeError) return;
     const saved: JobFunction = {
       ...(fn ?? { id: newId('f'), companyId }),
-      name: f.name.trim(), departmentId: f.departmentId || undefined, interim: f.interim, kind: f.kind,
+      name: f.name.trim(), code: code || undefined, departmentId: f.departmentId || undefined, interim: f.interim, kind: f.kind,
       minPresent: f.interim && f.kind === 'groupe' && f.minPresent !== '' ? Number(f.minPresent) : undefined,
     };
-    if (fn) updateItem('functions', saved); else addItem('functions', saved);
+    if (fn) updateItem('functions', saved);
+    else addItem('functions', saved);
+    syncLink(saved);
     toast(`Fonction « ${saved.name} » ${fn ? 'mise à jour' : 'ajoutée'}${saved.interim ? ` — intérim ${saved.kind}` : ''}`);
     onClose();
   };
@@ -218,7 +270,12 @@ function FunctionModal({ state, onClose }: { state?: { fn?: JobFunction }; onClo
     <Modal open onClose={onClose} title={fn ? `Modifier « ${fn.name} »` : 'Nouvelle fonction'}
       footer={<><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" onClick={save}>{fn ? 'Enregistrer' : 'Ajouter'}</button></>}>
       <div className="form-grid">
-        <Field label="Intitulé" required error={submitted ? nameError : undefined}>{(id) => <input id={id} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} />}</Field>
+        <Field label="Intitulé" required error={submitted ? nameError : undefined}>{(id) => <input id={id} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Ex. : Financier" />}</Field>
+        <Field label="Code" error={submitted ? codeError : undefined} hint={fn ? 'Unique dans la société.' : 'Déduit de l’intitulé (Paramètres › Numéro de souche).'}>
+          {(id) => !fn
+            ? <span className="input-locked"><Hash size={13} aria-hidden /><input id={id} value={code} readOnly aria-readonly placeholder="—" /><Lock size={12} aria-hidden /></span>
+            : <input id={id} value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />}
+        </Field>
         <Field label="Département">
           {(id) => (
             <select id={id} value={f.departmentId} onChange={(e) => setF({ ...f, departmentId: e.target.value })}>
@@ -247,6 +304,19 @@ function FunctionModal({ state, onClose }: { state?: { fn?: JobFunction }; onClo
           </label>
         </div>
         {f.kind === 'solo' && count > 1 && <Alert tone="warning" title="Plusieurs titulaires">{count} personnes occupent cette fonction : le type « groupe » serait plus adapté.</Alert>}
+        {f.kind === 'solo' && (
+          <div className="fn-link">
+            <Field label="Fonction solo liée (suppléance)" hint={soloFns.length ? 'Facultatif : les titulaires des fonctions liées ne peuvent pas être absents en même temps.' : 'Aucune autre fonction solo configurée dans la société.'}>
+              {(id) => (
+                <select id={id} value={f.linkTo} disabled={soloFns.length === 0} onChange={(e) => setF({ ...f, linkTo: e.target.value })}>
+                  <option value="">Aucune liaison</option>
+                  {soloFns.map((x) => <option key={x.id} value={x.id}>{x.name}{x.code ? ` (${x.code})` : ''}</option>)}
+                </select>
+              )}
+            </Field>
+            {f.linkTo && <p className="small text-muted"><Link2 size={12} aria-hidden className="inline-icon" /> Liée à <strong>{data.fn(f.linkTo)?.name}</strong> : gérable aussi dans Règles et quotas › Fonctions liées.</p>}
+          </div>
+        )}
         {f.kind === 'groupe' && (
           <div className="cap-row">
             <Field label="Présence minimale (personnes)" hint={fn ? `Effectif actif : ${count}. Exemple : 3 personnes et 2 requises → 1 absence possible à la fois.` : 'Peut aussi être réglée dans « Règles et quotas ».'}>

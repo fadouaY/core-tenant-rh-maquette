@@ -4,17 +4,17 @@ import { initialDatabase } from './data/mock';
 import { ensureAdminEmployee, provisionRh } from './core/provisioning';
 import type {
   AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, EmployeeContract, EmployeeDocument, EmployeeHistoryEntry, EmployeeNumbering, HrEvent, ID, ISODate,
-  LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, StatusChange, TenantUser,
+  ContractPolicy, LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, StatusChange, TenantUser,
 } from './types';
 import { formatDate, formatRange, nowStamp, TODAY } from './utils/dates';
 import { countLeaveDays, deriveProfiles, toPersonView } from './utils/leave';
-import { activeContract } from './utils/contracts';
+import { activeContract, expiringContracts } from './utils/contracts';
 import { HR_STATUS, hrStatusOf, statusTimeline } from './utils/status';
-import { circuitForDepartment, currencyOf, formatMoney, historyEntry, MARITAL_LABEL, nextMatricule, numberingOf, organisationalSchedule, rootDepartment, scheduleOn } from './utils/org';
+import { circuitForDepartment, currencyOf, formatMoney, historyEntry, MARITAL_LABEL, nextMatricule, numberingOf, organisationalSchedule, withNumbering, rootDepartment, scheduleOn } from './utils/org';
 import { countAuthorization } from './utils/hours';
 
 export type CollectionKey =
-  | 'departments' | 'functions' | 'functionLinks' | 'schedules' | 'leaveTypes' | 'leaveRules' | 'holidays' | 'countries' | 'roles' | 'circuits' | 'events' | 'primes' | 'documentTypes';
+  | 'departments' | 'functions' | 'functionLinks' | 'schedules' | 'leaveTypes' | 'leaveRules' | 'holidays' | 'countries' | 'roles' | 'circuits' | 'events' | 'primes' | 'documentTypes' | 'contractTypes';
 
 export interface Toast {
   id: number;
@@ -103,6 +103,8 @@ interface StoreValue {
   addItem: <K extends CollectionKey>(key: K, item: Database[K][number]) => void;
   updateItem: <K extends CollectionKey>(key: K, item: Database[K][number]) => void;
   setPresencePolicy: (policy: PresencePolicy) => void;
+  /** Délai d'alerte d'expiration des contrats ; les employés concernés font l'objet d'une notification. */
+  setContractPolicy: (policy: ContractPolicy) => void;
   markNotificationsRead: () => void;
 }
 
@@ -241,7 +243,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
           ...d,
           users,
           accesses: hasAccess ? d.accesses : [...d.accesses, { userId: userId!, appId: 'rh', companyId: cid }],
-          numberings: numbering ? [...d.numberings.filter((n) => n.companyId !== numbering.companyId), numbering] : d.numberings,
+          numberings: numbering ? withNumbering(d, numbering) : d.numberings,
           employees: before ? d.employees.map((e) => (e.id === employee.id ? saved : e)) : [...d.employees, saved],
           profiles: hasProfile ? d.profiles.map((p) => (p.employeeId === employee.id ? profile : p)) : [...d.profiles, profile],
         };
@@ -392,7 +394,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     },
 
     saveNumbering(numbering) {
-      setDb((d) => ({ ...d, numberings: [...d.numberings.filter((n) => n.companyId !== numbering.companyId), numbering] }));
+      setDb((d) => ({ ...d, numberings: withNumbering(d, numbering) }));
     },
 
     saveCircuit(circuit) {
@@ -485,6 +487,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDb((d) => ({ ...d, [key]: [...(d[key] as unknown[]), item] }));
     },
 
+    setContractPolicy(policy) {
+      setDb((d) => {
+        const next = { ...d, contractPolicies: [...d.contractPolicies.filter((x) => x.companyId !== policy.companyId), policy] };
+        const soon = expiringContracts(d.employees.filter((e) => e.companyId === policy.companyId), policy.expiryAlertDays);
+        return soon.length === 0 ? next : notify(next, `${soon.length} contrat${soon.length > 1 ? 's' : ''} arrive${soon.length > 1 ? 'nt' : ''} à échéance`,
+          soon.slice(0, 3).map((x) => `${x.employee.firstName} ${x.employee.lastName} (${x.contract.type}, dans ${x.left} j)`).join(' · ') + (soon.length > 3 ? '…' : ''),
+          `employes/${soon[0].employee.id}`);
+      });
+    },
     setPresencePolicy(policy) {
       setDb((d) => ({ ...d, presencePolicies: [...d.presencePolicies.filter((x) => x.companyId !== policy.companyId), policy] }));
     },
@@ -582,6 +593,7 @@ export function useCompanyData() {
       functions: by(db.functions),
       functionLinks: by(db.functionLinks),
       presencePolicy: db.presencePolicies.find((x) => x.companyId === companyId),
+      contractPolicies: db.contractPolicies,
       fn: (id?: ID) => db.functions.find((f) => f.id === id),
       profiles: by(db.profiles),
       profile: (id?: ID) => db.profiles.find((p) => p.employeeId === id),
@@ -595,6 +607,7 @@ export function useCompanyData() {
       circuits: by(db.circuits),
       primes: by(db.primes),
       documentTypes: by(db.documentTypes),
+      contractTypes: by(db.contractTypes),
       prime: (id?: ID) => db.primes.find((p) => p.id === id),
       loadingPeriods: by(db.loadingPeriods),
       currency: currencyOf(db.companies.find((c) => c.id === companyId)),

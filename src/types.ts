@@ -55,6 +55,8 @@ export interface JobFunction extends Archivable {
   id: ID;
   companyId: ID;
   name: string;
+  /** Code attribué par le numéro de souche des fonctions. */
+  code?: string;
   departmentId?: ID;
   /**
    * Règles d'intérim appliquées à la fonction (RH-15). Sans intérim, aucune règle de présence ne s'applique et
@@ -131,7 +133,23 @@ export interface EmployeeHistoryEntry {
   actorId?: ID;
 }
 
-export type ContractType = 'CDI' | 'CDD' | 'Stage';
+/** Code d'un type de contrat du catalogue de la société (ex. « CDI », « CDD »). */
+export type ContractType = string;
+
+/** Alerte d'expiration des contrats d'une société : nombre de jours avant l'échéance où l'utilisateur est notifié. */export interface ContractPolicy {  companyId: ID;  expiryAlertDays: number;}
+/** Type de contrat paramétré par la société. Archivé = plus proposé ; les contrats existants le conservent. */
+export interface ContractTypeDef extends Archivable {
+  id: ID;
+  companyId: ID;
+  code: string;
+  name: string;
+  /** À durée déterminée : une date de fin est exigée. */
+  fixedTerm: boolean;
+  /** Période d'essai proposée par défaut, en mois (absente = pas de période d'essai). */
+  trialMonths?: number;
+  /** Renouvelable (CDD, stage…). */
+  renewable: boolean;
+}
 
 /** Nature d'un contrat dans le parcours de l'employé. */
 export type ContractKind = 'initial' | 'renouvellement' | 'avenant' | 'nouveau';
@@ -145,7 +163,8 @@ export interface EmployeeContract {
   start: ISODate;
   /** Absente pour un CDI. */
   end?: ISODate;
-  /** Fin de la période d'essai éventuelle. */
+  /** Période d'essai éventuelle : durée en mois et date de fin qui en découle. */
+  trialMonths?: number;
   trialEnd?: ISODate;
   note?: string;
   /** Clôture anticipée : date de fin effective et motif. */
@@ -158,6 +177,8 @@ export interface EmployeeDocument {
   id: ID;
   typeId: ID;
   fileName: string;
+  /** Taille du fichier déposé, en octets. */
+  size?: number;
   addedAt: ISODate;
   /** Date d'expiration éventuelle (CIN, visite médicale…). */
   expiresAt?: ISODate;
@@ -227,6 +248,8 @@ export interface TimeSlot {
   label: string;
   start: string;
   end: string;
+  /** Jours où le créneau s'applique (1 = lundi … 7 = dimanche) ; absent = jours travaillés du scénario. */
+  days?: number[];
 }
 
 export interface Schedule extends Archivable {
@@ -245,6 +268,8 @@ export interface Schedule extends Archivable {
   departmentWorkDays?: Record<ID, number[]>;
   /** Jours non travaillés exceptionnels, distincts des jours fériés (RH-20). */
   exceptionalOffDays?: ExceptionalOffDay[];
+  /** Justification lorsque le volume des créneaux dépasse le volume hebdomadaire déclaré. */
+  volumeJustification?: string;
 }
 
 export interface ExceptionalOffDay {
@@ -321,10 +346,15 @@ export interface Role extends Archivable {
 
 export type CircuitStepKind = 'manager' | 'departmentHead' | 'employee';
 
+/** Approbation requise : la demande attend la décision ; consultation : l'approbateur est informé, sans bloquer. */
+export type CircuitIntervention = 'approbation' | 'consultation';
+
 export interface CircuitStep {
   kind: CircuitStepKind;
   employeeId?: ID;
   label: string;
+  /** Absente = approbation requise. Chaque niveau est notifié dans tous les cas. */
+  intervention?: CircuitIntervention;
 }
 
 /**
@@ -339,6 +369,8 @@ export interface ApprovalCircuit extends Archivable {
   exempt: boolean;
   steps: CircuitStep[];
   departmentId?: ID;
+  /** Date d'effet de la version du circuit. */
+  effectiveDate?: ISODate;
 }
 
 /** Prime du catalogue de la société (RH-27). Archivée = désactivée : plus attribuable, attributions conservées. */
@@ -365,6 +397,8 @@ export interface DocumentType extends Archivable {
   name: string;
   code: string;
   required: boolean;
+  /** Taille maximale d'un fichier déposé, en Mo (absente = sans limite). */
+  maxSizeMb?: number;
   /** Formats acceptés au dépôt (extensions en minuscules). */
   formats: DocumentFormat[];
 }
@@ -375,7 +409,11 @@ export type DocumentFormat = 'pdf' | 'jpg' | 'png' | 'docx';
  * Numérotation des employés d'une société (numéro de souche) : le matricule est attribué automatiquement et dans
  * l'ordre à la création — préfixe, année éventuelle et compteur sur un nombre fixe de chiffres.
  */
+export type NumberingEntity = 'employe' | 'departement' | 'fonction';
+
 export interface EmployeeNumbering {
+  /** Série numérotée ; absente = matricules des employés. */
+  entity?: NumberingEntity;
   companyId: ID;
   prefix: string;
   separator: '-' | '/' | '';
@@ -383,6 +421,8 @@ export interface EmployeeNumbering {
   digits: number;
   /** Prochain numéro attribué. */
   next: number;
+  /** Départements et fonctions : nombre de premières lettres du nom reprises dans le code (préfixe + lettres). */
+  letters?: number;
 }
 
 /** Période du tableau de chargement (RH-25, RH-26) : un horaire actif sur un intervalle, sans chevauchement. */
@@ -545,6 +585,7 @@ export interface Database {
   functions: JobFunction[];
   functionLinks: FunctionLink[];
   presencePolicies: PresencePolicy[];
+  contractPolicies: ContractPolicy[];
   employees: Employee[];
   profiles: LeaveProfile[];
   schedules: Schedule[];
@@ -556,6 +597,7 @@ export interface Database {
   circuits: ApprovalCircuit[];
   primes: Prime[];
   documentTypes: DocumentType[];
+  contractTypes: ContractTypeDef[];
   numberings: EmployeeNumbering[];
   loadingPeriods: LoadingPeriod[];
   requests: LeaveRequest[];

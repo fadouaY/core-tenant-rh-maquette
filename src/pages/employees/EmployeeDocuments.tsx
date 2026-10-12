@@ -10,6 +10,11 @@ import { FormCard } from '../../components/FormCard';
 
 const extOf = (name: string) => name.split('.').pop()?.toLowerCase() ?? '';
 const formatOk = (type: DocumentType | undefined, name: string) => !type || (type.formats as string[]).includes(extOf(name));
+/** Taille lisible : « 850 Ko », « 2,4 Mo ». */
+export const formatSize = (bytes: number) => (bytes < 1024 * 1024 ? `${Math.max(1, Math.round(bytes / 1024))} Ko` : `${(bytes / 1024 / 1024).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} Mo`);
+/** Dépassement de la taille maximale du type de document. */
+export const sizeError = (type: DocumentType | undefined, size?: number) =>
+  type?.maxSizeMb && size && size > type.maxSizeMb * 1024 * 1024 ? `Fichier trop volumineux (${formatSize(size)}) : ${type.maxSizeMb.toLocaleString('fr-FR')} Mo maximum.` : undefined;
 
 function expiry(d: EmployeeDocument) {
   if (!d.expiresAt) return { label: 'Sans expiration', tone: 'muted' as const };
@@ -29,7 +34,7 @@ export function DocumentsTab({ employee }: { employee: Employee }) {
   const provided = required.filter((t) => docs.some((d) => d.typeId === t.id));
   const alerts = docs.filter((d) => ['danger', 'warning'].includes(expiry(d).tone));
 
-  const [draft, setDraft] = useState({ typeId: '', fileName: '', expiresAt: '' });
+  const [draft, setDraft] = useState({ typeId: '', fileName: '', size: 0, expiresAt: '' });
   const [fileKey, setFileKey] = useState(0);
   const [submitted, setSubmitted] = useState(false);
   const [removing, setRemoving] = useState<EmployeeDocument>();
@@ -38,23 +43,26 @@ export function DocumentsTab({ employee }: { employee: Employee }) {
   if (!draft.typeId) errors.typeId = 'Type requis.';
   if (!draft.fileName) errors.fileName = 'Fichier requis.';
   else if (!formatOk(draftType, draft.fileName)) errors.fileName = `Formats acceptés : ${draftType!.formats.join(', ')}.`;
+  else if (sizeError(draftType, draft.size)) errors.fileName = sizeError(draftType, draft.size)!;
   if (draft.expiresAt && draft.expiresAt < TODAY) errors.expiresAt = 'Date déjà passée.';
   const err = (k: string) => (submitted ? errors[k] : undefined);
 
   const add = () => {
     setSubmitted(true);
     if (Object.keys(errors).length) return;
-    const doc: EmployeeDocument = { id: newId('doc'), typeId: draft.typeId, fileName: draft.fileName, addedAt: TODAY, expiresAt: draft.expiresAt || undefined };
+    const doc: EmployeeDocument = { id: newId('doc'), typeId: draft.typeId, fileName: draft.fileName, size: draft.size || undefined, addedAt: TODAY, expiresAt: draft.expiresAt || undefined };
     saveDocuments(employee.id, [...(employee.documents ?? []), doc], `Document ajouté : ${draftType?.name} (${doc.fileName})`);
     toast('Document ajouté');
-    setDraft({ typeId: '', fileName: '', expiresAt: '' });
+    setDraft({ typeId: '', fileName: '', size: 0, expiresAt: '' });
     setFileKey((k) => k + 1);
     setSubmitted(false);
   };
-  const replace = (d: EmployeeDocument, fileName: string) => {
+  const replace = (d: EmployeeDocument, fileName: string, size: number) => {
     const type = typeOf(d.typeId);
     if (!formatOk(type, fileName)) { toast(`Format refusé : ${type!.formats.join(', ')} attendus.`, 'info'); return; }
-    saveDocuments(employee.id, (employee.documents ?? []).map((x) => (x.id === d.id ? { ...x, fileName, addedAt: TODAY } : x)),
+    const tooBig = sizeError(type, size);
+    if (tooBig) { toast(tooBig, 'danger'); return; }
+    saveDocuments(employee.id, (employee.documents ?? []).map((x) => (x.id === d.id ? { ...x, fileName, size, addedAt: TODAY } : x)),
       `Document remplacé : ${type?.name} (${d.fileName} → ${fileName})`);
     toast('Document remplacé');
   };
@@ -95,13 +103,13 @@ export function DocumentsTab({ employee }: { employee: Employee }) {
               </select>
             )}
           </Field>
-          <Field label="Fichier" required error={err('fileName')} hint={draftType ? `Formats : ${draftType.formats.join(', ')}` : undefined}>
+          <Field label="Fichier" required error={err('fileName')} hint={draftType ? `Formats : ${draftType.formats.join(', ')}${draftType.maxSizeMb ? ` · ${draftType.maxSizeMb.toLocaleString('fr-FR')} Mo max.` : ''}` : undefined}>
             {(id) => (
               <label className={`ffile ${draft.fileName ? 'has-file' : ''}`} htmlFor={id}>
                 <Upload size={13} aria-hidden />
                 <span className="ffile-name">{draft.fileName || 'Insérer un document…'}</span>
                 <input key={fileKey} id={id} type="file" accept={draftType ? draftType.formats.map((f) => `.${f}`).join(',') : undefined}
-                  onChange={(e) => setDraft({ ...draft, fileName: e.target.files?.[0]?.name ?? '' })} />
+                  onChange={(e) => setDraft({ ...draft, fileName: e.target.files?.[0]?.name ?? '', size: e.target.files?.[0]?.size ?? 0 })} />
               </label>
             )}
           </Field>
@@ -122,14 +130,14 @@ export function DocumentsTab({ employee }: { employee: Employee }) {
                   return (
                     <tr key={d.id}>
                       <td><span className="person-name">{type?.name ?? '—'}</span>{type?.required && <span className="block small text-muted">Obligatoire</span>}</td>
-                      <td><span className="rp-file"><Paperclip size={12} aria-hidden /> {d.fileName}</span></td>
+                      <td><span className="rp-file"><Paperclip size={12} aria-hidden /> {d.fileName}</span>{d.size ? <span className="block small text-muted">{formatSize(d.size)}</span> : null}</td>
                       <td className="nowrap">{formatDate(d.addedAt)}</td>
                       <td><Badge tone={ex.tone}>{ex.label}</Badge></td>
                       <td className="actions">
                         <label className="btn btn-sm btn-ghost doc-replace" title="Remplacer le fichier">
                           <RefreshCw size={13} aria-hidden /> Remplacer
                           <input type="file" accept={type ? type.formats.map((f) => `.${f}`).join(',') : undefined}
-                            onChange={(e) => { const n = e.target.files?.[0]?.name; if (n) replace(d, n); e.target.value = ''; }} />
+                            onChange={(e) => { const file = e.target.files?.[0]; if (file) replace(d, file.name, file.size); e.target.value = ''; }} />
                         </label>
                         <button type="button" className="icon-btn icon-btn-sm icon-btn-danger" title="Supprimer" aria-label={`Supprimer ${d.fileName}`} onClick={() => setRemoving(d)}><Trash2 size={14} /></button>
                       </td>

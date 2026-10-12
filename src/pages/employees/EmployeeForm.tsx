@@ -4,11 +4,12 @@ import {
   Save, ShieldCheck, Star, Trash2, Upload, UserRound, Users,
 } from 'lucide-react';
 import { newId, useCompanyData, useStore } from '../../store';
-import type { ContractType, Employee, EmployeeContract, EmployeeDocument, HrStatus, LeaveProfile, MaritalStatus, Role } from '../../types';
+import type { Employee, EmployeeContract, EmployeeDocument, HrStatus, LeaveProfile, MaritalStatus, Role } from '../../types';
 import { formatDate, TODAY } from '../../utils/dates';
 import { dayHours } from '../../utils/hours';
 import { defaultProfile, profileRoleIds } from '../../utils/leave';
-import { activeContract } from '../../utils/contracts';
+import { activeContract, contractTypeDef, isFixedTerm, trialEndOf } from '../../utils/contracts';
+import { sizeError } from './EmployeeDocuments';
 import { HR_STATUS, hrStatusOf } from '../../utils/status';
 import { circuitForDepartment, formatMoney, MARITAL_LABEL, nextMatricule, organisationalSchedule } from '../../utils/org';
 import { Alert, Avatar, Badge, Drawer, Field, Switch } from '../../components/ui';
@@ -18,12 +19,6 @@ import { phoneError } from '../../utils/phone';
 import { PERMISSIONS } from '../../data/mock';
 import { ExtraPermissionsPicker } from './ExtraPermissions';
 import { PRIME_PERIODICITY } from './EmployeeSections';
-
-const CONTRACT_LABEL: Record<ContractType, string> = {
-  CDI: 'Contrat à durée indéterminée (CDI)',
-  CDD: 'Contrat à durée déterminée (CDD)',
-  Stage: 'Convention de stage',
-};
 
 function blankEmployee(companyId: string, defaults: Partial<Employee>): Employee {
   return {
@@ -53,6 +48,8 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
   const [profile, setProfile] = useState<LeaveProfile>(() => defaultProfile(db, blankEmployee(companyId, {})));
   const [salary, setSalary] = useState('');
   const [withHistory, setWithHistory] = useState(false);
+  // Période d'essai du contrat initial, en mois (undefined = pas de période d'essai) ; proposée selon le type de contrat.
+  const [trialMonths, setTrialMonths] = useState<number>();
   const [submitted, setSubmitted] = useState(false);
   const isNew = !employee;
 
@@ -67,6 +64,7 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
     const linked = base.account.userId ?? db.users.find((u) => base.id && u.employeeLinks[companyId] === base.id)?.id;
     setForm({ ...base, account: { ...base.account, userId: linked }, contracts: base.contracts ?? [], documents: base.documents ?? [] });
     setWithHistory(!!base.contracts?.length);
+    setTrialMonths(employee ? undefined : contractTypeDef(data.contractTypes, base.contract)?.trialMonths);
     setProfile(data.profile(base.id) ?? defaultProfile(db, base));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, employee, companyId]);
@@ -90,7 +88,9 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
   const loading = form.scheduleMode === 'chargement';
   const moved = !!employee && (employee.departmentId !== form.departmentId || employee.subDepartmentId !== form.subDepartmentId);
   const activePrimes = data.primes.filter((p) => !p.archived);
-  const needsEnd = form.contract !== 'CDI';
+  const contractTypes = data.contractTypes.filter((t) => !t.archived);
+  const needsEnd = isFixedTerm(data.contractTypes, form.contract);
+  const trialEnd = isNew && trialMonths && form.hireDate ? trialEndOf(form.hireDate, trialMonths) : undefined;
   const contracts = form.contracts ?? [];
   const documents = form.documents ?? [];
   const docTypes = data.documentTypes.filter((t) => !t.archived);
@@ -122,6 +122,8 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
   if (loading && !(Number(form.weeklyHours) > 0 && Number(form.weeklyHours) <= 80)) errors.weeklyHours = 'Entre 1 et 80 heures.';
   if (!form.functionId) errors.functionId = 'Choisissez une fonction.';
   if (!form.hireDate) errors.hireDate = 'Date d’embauche requise.';
+  if (isNew && trialMonths !== undefined && !(Number.isInteger(trialMonths) && trialMonths >= 1 && trialMonths <= 12)) errors.trialMonths = 'Entre 1 et 12 mois.';
+  else if (trialEnd && needsEnd && form.contractEnd && trialEnd > form.contractEnd) errors.trialMonths = 'La période d’essai dépasse la fin du contrat.';
   if (isNew && needsEnd && !form.contractEnd) errors.contractEnd = `Date de fin requise pour un contrat ${form.contract}.`;
   else if (isNew && needsEnd && form.contractEnd && form.hireDate && form.contractEnd <= form.hireDate) errors.contractEnd = 'La fin doit suivre la date d’embauche.';
   if (isNew && !(Number(salary) > 0)) errors.salary = 'Montant strictement positif.';
@@ -132,7 +134,7 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
   if (form.account.active && roleIds.length === 0) errors.roles = 'Attribuez au moins un rôle.';
   if (isNew && withHistory) contracts.forEach((c, i) => {
     if (!c.start) errors[`c${i}start`] = 'Début requis.';
-    if (c.type !== 'CDI' && !c.end) errors[`c${i}end`] = 'Fin requise.';
+    if (isFixedTerm(data.contractTypes, c.type) && !c.end) errors[`c${i}end`] = 'Fin requise.';
     else if (c.end && c.start && c.end <= c.start) errors[`c${i}end`] = 'Après le début.';
   });
   documents.forEach((d, i) => {
@@ -140,6 +142,7 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
     if (!d.typeId) errors[`d${i}type`] = 'Type requis.';
     if (!d.fileName) errors[`d${i}file`] = 'Fichier requis.';
     else if (type && !type.formats.includes(d.fileName.split('.').pop()?.toLowerCase() as never)) errors[`d${i}file`] = `Formats : ${type.formats.join(', ')}.`;
+    else if (sizeError(type, d.size)) errors[`d${i}file`] = sizeError(type, d.size)!;
   });
   const err = (k: string) => (submitted ? errors[k] : undefined);
 
@@ -149,8 +152,8 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
     const id = form.id || newId('e');
     // Création : le contrat initial (date d'embauche) ouvre le parcours, suivi des contrats saisis.
     const newContracts: EmployeeContract[] = [
-      { id: newId('ctr'), kind: 'initial', type: form.contract, start: form.hireDate, end: needsEnd ? form.contractEnd : undefined },
-      ...(withHistory ? contracts.map((c) => ({ ...c, kind: c.kind ?? 'nouveau' as const, end: c.type === 'CDI' ? undefined : c.end })) : []),
+      { id: newId('ctr'), kind: 'initial', type: form.contract, start: form.hireDate, end: needsEnd ? form.contractEnd : undefined, trialMonths: trialMonths || undefined, trialEnd },
+      ...(withHistory ? contracts.map((c) => ({ ...c, kind: c.kind ?? 'nouveau' as const, end: isFixedTerm(data.contractTypes, c.type) ? c.end : undefined })) : []),
     ];
     const inForce = isNew ? activeContract(newContracts) : undefined;
     const saved: Employee = {
@@ -241,7 +244,7 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
             <Field label="Prénom" required error={err('firstName')}>{(id) => <input id={id} value={form.firstName} onChange={(e) => set('firstName', e.target.value)} onBlur={autoEmail} autoComplete="off" placeholder="Ex. : Mohamed" />}</Field>
             <Field label="Nom" required error={err('lastName')}>{(id) => <input id={id} value={form.lastName} onChange={(e) => set('lastName', e.target.value)} onBlur={autoEmail} autoComplete="off" placeholder="Ex. : Bennani" />}</Field>
             <Field label="Matricule application" required error={err('matricule')}
-              hint={isNew ? <>Attribué automatiquement (Paramètres › Numérotation des employés).</> : 'Unique dans la société ; toute modification est historisée.'}>
+              hint={isNew ? <>Attribué automatiquement (Paramètres › Numéro de souche).</> : 'Unique dans la société ; toute modification est historisée.'}>
               {(id) => isNew
                 ? <span className="input-locked"><Hash size={13} aria-hidden /><input id={id} value={matricule} readOnly aria-readonly /><Lock size={12} aria-hidden /></span>
                 : <input id={id} value={form.matricule} onChange={(e) => set('matricule', e.target.value)} />}
@@ -427,14 +430,28 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
           <div className="form-grid">
             <Field label={isNew ? 'Type de contrat initial' : 'Type de contrat en cours'} required>
               {(id) => (
-                <select id={id} value={form.contract} onChange={(e) => set('contract', e.target.value as ContractType)}>
-                  {(Object.keys(CONTRACT_LABEL) as ContractType[]).map((k) => <option key={k} value={k}>{CONTRACT_LABEL[k]}</option>)}
+                <select id={id} value={form.contract} onChange={(e) => { set('contract', e.target.value); setTrialMonths(contractTypeDef(data.contractTypes, e.target.value)?.trialMonths); }}>
+                  {contractTypes.map((t) => <option key={t.id} value={t.code}>{t.name} ({t.code})</option>)}
                 </select>
               )}
             </Field>
-            <Field label="Date de fin de contrat" required={needsEnd} error={err('contractEnd')} hint={needsEnd ? undefined : 'Sans objet pour un CDI.'}>
+            <Field label="Date de fin de contrat" required={needsEnd} error={err('contractEnd')} hint={needsEnd ? undefined : 'Sans objet : contrat à durée indéterminée.'}>
               {(id) => <input id={id} type="date" value={needsEnd ? form.contractEnd ?? '' : ''} disabled={!needsEnd} min={form.hireDate} onChange={(e) => set('contractEnd', e.target.value || undefined)} />}
             </Field>
+            <div className="span-2 trial-box">
+              <label className="fcheck">
+                <input type="checkbox" checked={trialMonths !== undefined} onChange={(e) => setTrialMonths(e.target.checked ? contractTypeDef(data.contractTypes, form.contract)?.trialMonths ?? 1 : undefined)} />
+                Ce contrat comporte une période d’essai
+              </label>
+              {trialMonths !== undefined && (
+                <div className="trial-row">
+                  <Field label="Durée de la période d’essai" required error={err('trialMonths')}>
+                    {(id) => <span className="input-suffix"><input id={id} type="number" min={1} max={12} step={1} value={trialMonths || ''} onChange={(e) => setTrialMonths(e.target.value === '' ? 0 : Number(e.target.value))} /><span aria-hidden>mois</span></span>}
+                  </Field>
+                  {trialEnd && <p className="trial-end">Fin de la période d’essai : <strong>{formatDate(trialEnd)}</strong></p>}
+                </div>
+              )}
+            </div>
             {isNew && (
               <Field label={`Salaire initial brut mensuel (${data.currency})`} required error={err('salary')} hint="Date d’effet : la date d’embauche.">
                 {(id) => <span className="input-suffix"><input id={id} type="number" min={0} step={100} value={salary} onChange={(e) => setSalary(e.target.value)} /><span aria-hidden>{data.currency}</span></span>}
@@ -454,14 +471,14 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
                   <div key={c.id} className="frow frow-contract">
                     <Field label="Type de contrat">
                       {(id) => (
-                        <select id={id} value={c.type} onChange={(e) => setContract(i, { type: e.target.value as ContractType })}>
-                          {(Object.keys(CONTRACT_LABEL) as ContractType[]).map((k) => <option key={k} value={k}>{k === 'Stage' ? 'Stage' : k}</option>)}
+                        <select id={id} value={c.type} onChange={(e) => setContract(i, { type: e.target.value })}>
+                          {contractTypes.map((t) => <option key={t.id} value={t.code}>{t.code}</option>)}
                         </select>
                       )}
                     </Field>
                     <Field label="Date de début" error={err(`c${i}start`)}>{(id) => <input id={id} type="date" value={c.start} onChange={(e) => setContract(i, { start: e.target.value })} />}</Field>
                     <Field label="Date de fin" error={err(`c${i}end`)}>
-                      {(id) => <input id={id} type="date" value={c.type === 'CDI' ? '' : c.end ?? ''} disabled={c.type === 'CDI'} min={c.start} onChange={(e) => setContract(i, { end: e.target.value })} />}
+                      {(id) => <input id={id} type="date" value={isFixedTerm(data.contractTypes, c.type) ? c.end ?? '' : ''} disabled={!isFixedTerm(data.contractTypes, c.type)} min={c.start} onChange={(e) => setContract(i, { end: e.target.value })} />}
                     </Field>
                     <button type="button" className="icon-btn icon-btn-danger" aria-label={`Supprimer le contrat ${i + 1}`} onClick={() => set('contracts', contracts.filter((_, j) => j !== i))}><Trash2 size={14} /></button>
                   </div>
@@ -598,13 +615,13 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
                         </select>
                       )}
                     </Field>
-                    <Field label="Fichier" error={err(`d${i}file`)} hint={type ? `Formats : ${type.formats.join(', ')}` : undefined}>
+                    <Field label="Fichier" error={err(`d${i}file`)} hint={type ? `Formats : ${type.formats.join(', ')}${type.maxSizeMb ? ` · ${type.maxSizeMb.toLocaleString('fr-FR')} Mo max.` : ''}` : undefined}>
                       {(id) => (
                         <label className={`ffile ${d.fileName ? 'has-file' : ''}`} htmlFor={id}>
                           <Upload size={13} aria-hidden />
                           <span className="ffile-name">{d.fileName || 'Insérer un document…'}</span>
                           <input id={id} type="file" accept={type ? type.formats.map((f) => `.${f}`).join(',') : undefined}
-                            onChange={(e) => setDoc(i, { fileName: e.target.files?.[0]?.name ?? '' })} />
+                            onChange={(e) => setDoc(i, { fileName: e.target.files?.[0]?.name ?? '', size: e.target.files?.[0]?.size })} />
                         </label>
                       )}
                     </Field>

@@ -2,11 +2,12 @@
 import type {
   AppAssignment, AppInfo, FunctionLink, PresencePolicy, TenantUser, UserAccess,
   ApprovalCircuit, ApprovalStep, Company, Database, Department, Employee, HistoryEntry, Holiday, HrEvent,
-  JobFunction, LeaveProfile, LeaveRequest, LeaveRule, LeaveType, LoadingPeriod, Notification, DocumentType, EmployeeNumbering, Permission, Prime, Role, Schedule, Country,
+  JobFunction, LeaveProfile, LeaveRequest, LeaveRule, LeaveType, LoadingPeriod, Notification, DocumentType, ContractPolicy, ContractTypeDef, EmployeeNumbering, Permission, Prime, Role, Schedule, Country,
 } from '../types';
 import { countLeaveDays, deriveProfiles } from '../utils/leave';
 import { formatRange } from '../utils/dates';
 import { countAuthorization } from '../utils/hours';
+import { nameCode } from '../utils/org';
 
 /** Permissions de l'application RH. */
 export const PERMISSIONS: Permission[] = [
@@ -118,6 +119,12 @@ const functionLinks: FunctionLink[] = [
 ];
 
 /** Types de congé soumis aux règles de présence (les absences non planifiées, comme la maladie, en sont exclues). */
+/** Alerte d'expiration des contrats : délai de notification avant l'échéance, par société. */
+const contractPolicies: ContractPolicy[] = [
+  { companyId: 'c1', expiryAlertDays: 30 },
+  { companyId: 'c2', expiryAlertDays: 45 },
+];
+
 const presencePolicies: PresencePolicy[] = [
   { companyId: 'c1', leaveTypeIds: ['lt1', 'lt3', 'lt4', 'lt5', 'lt7'], effect: 'block' },
   { companyId: 'c2', leaveTypeIds: ['hlt1', 'hlt2'], effect: 'block' },
@@ -211,23 +218,23 @@ const circuits: ApprovalCircuit[] = [
       { kind: 'employee', employeeId: 'e1', label: 'Responsable RH' },
       { kind: 'employee', employeeId: 'e2', label: 'Directeur général' },
     ] },
-  { id: 'ci5', companyId: 'c1', name: 'Direction générale — dispensé', description: 'Les demandes sont validées automatiquement à l’envoi.', exempt: true, departmentId: 'd1', steps: [] },
+  { id: 'ci5', companyId: 'c1', name: 'Direction générale', description: 'Validation par le directeur général.', exempt: false, departmentId: 'd1', effectiveDate: '2024-01-15', steps: [{ kind: 'departmentHead', label: 'Directeur général', intervention: 'approbation' }] },
   { id: 'ci6', companyId: 'c1', name: 'Ancien circuit commercial', description: 'Remplacé par « Commercial — manager direct ».', exempt: false, archived: true,
     steps: [{ kind: 'employee', employeeId: 'e12', label: 'Responsable commercial' }, { kind: 'employee', employeeId: 'e7', label: 'DAF' }] },
   { id: 'hci1', companyId: 'c2', name: 'Exploitation — manager direct', description: 'Validation par le responsable.', exempt: false, departmentId: 'hd2', steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
-  { id: 'hci2', companyId: 'c2', name: 'Administration — dispensé', description: 'Validation automatique.', exempt: true, departmentId: 'hd1', steps: [] },
+  { id: 'hci2', companyId: 'c2', name: 'Administration', description: 'Validation par le responsable de l’administration.', exempt: false, departmentId: 'hd1', effectiveDate: '2024-03-01', steps: [{ kind: 'departmentHead', label: 'Responsable administration', intervention: 'approbation' }] },
   { id: 'hci3', companyId: 'c2', name: 'Service client — manager direct', description: 'Validation par le responsable.', exempt: false, departmentId: 'hd3', steps: [{ kind: 'manager', label: 'Manager direct (N+1)' }] },
 ];
 
 /** Catalogue des primes (RH-27). */
 const primes: Prime[] = [
-  { id: 'pr1', companyId: 'c1', name: 'Prime de transport', code: 'TRANS', amount: 300, type: 'fixe', periodicity: 'mensuelle' },
+  { id: 'pr1', companyId: 'c1', name: 'Prime de transport', code: 'TRANS', amount: 300, type: 'fixe', periodicity: 'ponctuelle' },
   { id: 'pr2', companyId: 'c1', name: 'Prime de rendement', code: 'REND', amount: 1500, type: 'variable', periodicity: 'trimestrielle' },
   { id: 'pr3', companyId: 'c1', name: 'Prime d’astreinte', code: 'ASTR', amount: 800, type: 'variable', periodicity: 'mensuelle' },
-  { id: 'pr4', companyId: 'c1', name: 'Prime de panier', code: 'PAN', amount: 200, type: 'fixe', periodicity: 'mensuelle' },
+  { id: 'pr4', companyId: 'c1', name: 'Prime de panier', code: 'PAN', amount: 200, type: 'fixe', periodicity: 'ponctuelle' },
   { id: 'pr5', companyId: 'c1', name: 'Prime exceptionnelle projet ERP', code: 'ERP', amount: 2000, type: 'exceptionnelle', periodicity: 'ponctuelle', archived: true },
   { id: 'hpr1', companyId: 'c2', name: 'Prime de nuit', code: 'NUIT', amount: 120, type: 'variable', periodicity: 'mensuelle' },
-  { id: 'hpr2', companyId: 'c2', name: 'Indemnité de transport', code: 'TRANS', amount: 50, type: 'fixe', periodicity: 'mensuelle' },
+  { id: 'hpr2', companyId: 'c2', name: 'Indemnité de transport', code: 'TRANS', amount: 50, type: 'fixe', periodicity: 'ponctuelle' },
 ];
 
 /** Types de documents du dossier employé (RH-17). */
@@ -242,9 +249,24 @@ const documentTypes: DocumentType[] = [
   { id: 'hdt2', companyId: 'c2', name: 'Contrat de travail signé', code: 'CONTRAT', required: true, formats: ['pdf'] },
 ];
 
+
+/** Catalogue des types de contrat par société (paramétrable). */
+export const defaultContractTypes = (companyId: string, prefix: string): ContractTypeDef[] => [
+  { id: `${prefix}ct1`, companyId, code: 'CDI', name: 'Contrat à durée indéterminée', fixedTerm: false, renewable: false, trialMonths: 3 },
+  { id: `${prefix}ct2`, companyId, code: 'CDD', name: 'Contrat à durée déterminée', fixedTerm: true, renewable: true, trialMonths: 1 },
+  { id: `${prefix}ct3`, companyId, code: 'Stage', name: 'Convention de stage', fixedTerm: true, renewable: true },
+];
+const contractTypes: ContractTypeDef[] = [
+  ...defaultContractTypes('c1', ''),
+  { id: 'ct4', companyId: 'c1', code: 'ANAPEC', name: 'Contrat d’insertion (ANAPEC)', fixedTerm: true, renewable: true, trialMonths: 1 },
+  { id: 'ct5', companyId: 'c1', code: 'INTERIM', name: 'Mission d’intérim', fixedTerm: true, renewable: true, archived: true },
+  ...defaultContractTypes('c2', 'h'),
+];
 /** Numérotation des matricules (numéro de souche), poursuivie après les fiches existantes. */
 const numberings: EmployeeNumbering[] = [
   { companyId: 'c1', prefix: 'ATC', separator: '-', withYear: false, digits: 5, next: 1120 },
+  { companyId: 'c1', entity: 'departement', prefix: 'DEP', separator: '-', withYear: false, digits: 3, next: 1, letters: 3 },
+  { companyId: 'c1', entity: 'fonction', prefix: 'FCT', separator: '-', withYear: false, digits: 3, next: 1, letters: 3 },
   { companyId: 'c2', prefix: 'HZS', separator: '-', withYear: false, digits: 5, next: 1036 },
 ];
 
@@ -445,11 +467,23 @@ const countries: Country[] = ['c1', 'c2'].flatMap((c) => [
   { id: `ctry-${c}-sn`, companyId: c, name: 'Sénégal', dialCode: '221', digits: 9, archived: c === 'c1' },
 ]);
 
+
+/** Codes de fonction attribués par le numéro de souche des fonctions : préfixe + 3 premières lettres du nom (FCT-DIR, FCT-DIR2…). */
+function withFunctionCodes(list: JobFunction[]): JobFunction[] {
+  const taken: Record<string, Set<string>> = {};
+  return list.map((f) => {
+    const set = (taken[f.companyId] ??= new Set());
+    const code = f.code ?? nameCode({ prefix: 'FCT', separator: '-', letters: 3 }, f.name, set);
+    set.add(code);
+    return { ...f, code };
+  });
+}
+
 function buildDatabase(): Database {
   const base: Database = {
     tenant: { name: 'Groupe Atlas', ownerUserId: 'u1', plan: 'Offre Business', maxCompanies: 5, maxUsers: 10 }, apps: APPS, assignments, users, accesses,
-    companies, departments, functions, functionLinks, presencePolicies, employees, profiles, schedules, leaveTypes, leaveRules, holidays, countries, roles, circuits,
-    primes, documentTypes, numberings, loadingPeriods, requests: [], events, notifications,
+    companies, departments, functions: withFunctionCodes(functions), functionLinks, presencePolicies, contractPolicies, employees, profiles, schedules, leaveTypes, leaveRules, holidays, countries, roles, circuits,
+    primes, documentTypes: documentTypes.map((t) => ({ maxSizeMb: t.formats.includes('docx') ? 10 : 5, ...t })), contractTypes, numberings, loadingPeriods, requests: [], events, notifications,
   };
   base.requests = requestSeeds.map((r) => {
     const startPart = r.startPart ?? 'full';

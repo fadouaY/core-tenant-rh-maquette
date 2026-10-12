@@ -1,4 +1,4 @@
-import { BadgePercent, Briefcase, Building2, CalendarCheck, CalendarOff, Clock, FileText, GitBranch, Globe, IdCard, ListChecks, Settings, ShieldCheck } from 'lucide-react';
+import { BadgePercent, Briefcase, Building2, CalendarCheck, CalendarOff, Clock, FileSignature, FileText, GitBranch, Globe, IdCard, ListChecks, Settings, ShieldCheck } from 'lucide-react';
 import { useCompanyData } from '../../store';
 import { PageHeader } from '../../components/ui';
 import { CircuitsSection } from './CircuitsSection';
@@ -11,21 +11,23 @@ import { CountriesSection } from './CountriesSection';
 import { PrimesSection } from './PrimesSection';
 import { DocumentTypesSection } from './DocumentTypesSection';
 import { NumberingSection } from './NumberingSection';
+import { ContractTypesSection } from './ContractTypesSection';
 
-/** Sous-sections des paramètres (affichées dans la sous-navigation du shell). */
+/** Sous-sections des paramètres, dans l'ordre de la sous-navigation du shell. */
 export const SETTINGS_SECTIONS = [
+  { id: 'numerotation', group: 'Numérotation', label: 'Numéro de souche', icon: IdCard, Component: NumberingSection },
   { id: 'departements', group: 'Organisation', label: 'Départements', icon: Building2, Component: DepartmentsSection },
   { id: 'fonctions', group: 'Organisation', label: 'Fonctions', icon: Briefcase, Component: FunctionsSection },
-  { id: 'numerotation', group: 'Organisation', label: 'Numérotation des employés', icon: IdCard, Component: NumberingSection },
-  { id: 'pays', group: 'Organisation', label: 'Pays et téléphone', icon: Globe, Component: CountriesSection },
-  { id: 'primes', group: 'Organisation', label: 'Catalogue des primes', icon: BadgePercent, Component: PrimesSection },
-  { id: 'types-document', group: 'Organisation', label: 'Types de documents', icon: FileText, Component: DocumentTypesSection },
-  { id: 'horaires', group: 'Temps et congés', label: 'Horaires et créneaux', icon: Clock, Component: SchedulesSection },
-  { id: 'types-conge', group: 'Temps et congés', label: 'Types de congé', icon: CalendarCheck, Component: LeaveTypesSection },
-  { id: 'regles', group: 'Temps et congés', label: 'Règles et quotas', icon: ListChecks, Component: RulesAndPresence },
-  { id: 'jours-feries', group: 'Temps et congés', label: 'Jours fériés', icon: CalendarOff, Component: HolidaysSection },
   { id: 'roles', group: 'Accès et validation', label: 'Rôles et permissions', icon: ShieldCheck, Component: RolesSection },
   { id: 'circuits', group: 'Accès et validation', label: 'Circuits d’approbation', icon: GitBranch, Component: CircuitsSection },
+  { id: 'horaires', group: 'Temps de travail', label: 'Scénarios d’horaires', icon: Clock, Component: SchedulesSection },
+  { id: 'types-contrat', group: 'Contrats et rémunération', label: 'Types de contrat', icon: FileSignature, Component: ContractTypesSection },
+  { id: 'primes', group: 'Contrats et rémunération', label: 'Catalogue des primes', icon: BadgePercent, Component: PrimesSection },
+  { id: 'types-document', group: 'Contrats et rémunération', label: 'Types de documents', icon: FileText, Component: DocumentTypesSection },
+  { id: 'types-conge', group: 'Congés', label: 'Types de congé', icon: CalendarCheck, Component: LeaveTypesSection },
+  { id: 'regles', group: 'Congés', label: 'Règles et quotas', icon: ListChecks, Component: RulesAndPresence },
+  { id: 'jours-feries', group: 'Congés', label: 'Jours fériés', icon: CalendarOff, Component: HolidaysSection },
+  { id: 'pays', group: 'Référentiels', label: 'Pays et téléphone', icon: Globe, Component: CountriesSection },
 ] as const;
 
 export function SettingsPage({ param }: { param?: string }) {

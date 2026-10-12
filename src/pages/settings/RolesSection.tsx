@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Archive, ArchiveRestore, KeyRound, Plus, RotateCcw, Save, ShieldCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, KeyRound, Lock, Pencil, Plus, RotateCcw, Save, ShieldCheck } from 'lucide-react';
 import { newId, useCompanyData, useStore } from '../../store';
 import { profileRoleIds } from '../../utils/leave';
-import { Alert, ArchivedBadge, Card, Drawer, Field, Switch } from '../../components/ui';
+import { Alert, ArchivedBadge, Badge, Card, Drawer, Field, Switch } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
 import { knownPermissions, PermissionMatrix, PermissionSummary } from './PermissionMatrix';
 
@@ -14,7 +14,9 @@ export function RolesSection() {
   const [open, setOpen] = useState(false);
   const role = data.role(selectedId) ?? data.roles[0];
   const [perms, setPerms] = useState<string[]>(role?.permissions ?? []);
+  const [editing, setEditing] = useState(false);
   useEffect(() => setPerms(role?.permissions ?? []), [role?.id, role?.permissions]);
+  useEffect(() => setEditing(false), [role?.id]);
 
   const dirty = role && perms.slice().sort().join() !== role.permissions.slice().sort().join();
   const holders = data.profiles.filter((p) => !!role && profileRoleIds(p).includes(role.id));
@@ -43,23 +45,35 @@ export function RolesSection() {
         <Card
           title={<>Permissions — {role.name}</>}
           actions={
-            <button type="button" className="btn btn-sm btn-ghost" onClick={() => setArchived('roles', role.id, !role.archived)}>
-              {role.archived ? <><ArchiveRestore size={14} aria-hidden /> Restaurer</> : <><Archive size={14} aria-hidden /> Archiver</>}
-            </button>
+            <>
+              {editing
+                ? <Badge tone="warning" icon={<Pencil size={11} aria-hidden />}>Modification en cours</Badge>
+                : <button type="button" className="btn btn-sm btn-ghost" disabled={role.archived} onClick={() => setEditing(true)} title="Modifier les permissions de ce rôle"><Pencil size={14} aria-hidden /> Modifier</button>}
+              <button type="button" className="btn btn-sm btn-ghost" disabled={editing} onClick={() => setArchived('roles', role.id, !role.archived)}>
+                {role.archived ? <><ArchiveRestore size={14} aria-hidden /> Restaurer</> : <><Archive size={14} aria-hidden /> Archiver</>}
+              </button>
+            </>
           }
         >
           <p className="small text-muted mb-12">{role.description}</p>
           {role.archived && <Alert tone="warning" title="Rôle archivé">Il n’est plus proposé à l’attribution. Les {holders.length} personne(s) qui le détiennent conservent leurs accès jusqu’à réaffectation.</Alert>}
-          <PermissionMatrix value={perms} onChange={setPerms} disabled={role.archived} />
-          <p className="small text-muted mt-12">
-            Les permissions héritées s’appliquent à {holders.length} personne(s). Des ajouts ou retraits individuels sont possibles depuis l’onglet « Accès » de chaque fiche employé.
-          </p>
-          <div className="row-gap mt-12">
-            <button type="button" className="btn btn-ghost" disabled={!dirty} onClick={() => setPerms(role.permissions)}><RotateCcw size={15} aria-hidden /> Annuler</button>
-            <button type="button" className="btn btn-primary" disabled={!dirty} onClick={() => { updateRole({ ...role, permissions: perms }); toast(`Rôle « ${role.name} » mis à jour`); }}>
-              <Save size={15} aria-hidden /> Enregistrer
-            </button>
+          {!editing && !role.archived && (
+            <p className="perm-locked"><Lock size={13} aria-hidden /> Permissions verrouillées pour éviter les erreurs. Cliquez sur <strong>Modifier</strong> pour cocher ou décocher.</p>
+          )}
+          <div className={editing ? 'perm-editing' : 'perm-readonly'}>
+            <PermissionMatrix value={perms} onChange={setPerms} disabled={!editing || role.archived} />
           </div>
+          <p className="small text-muted mt-12">
+            Les permissions héritées s’appliquent à {holders.length} personne(s). Des ajouts ou retraits individuels sont possibles depuis l’onglet « Rôles et permissions » de chaque fiche employé.
+          </p>
+          {editing && (
+            <div className="row-gap mt-12">
+              <button type="button" className="btn btn-ghost" onClick={() => { setPerms(role.permissions); setEditing(false); }}><RotateCcw size={15} aria-hidden /> Annuler</button>
+              <button type="button" className="btn btn-primary" disabled={!dirty} onClick={() => { updateRole({ ...role, permissions: perms }); setEditing(false); toast(`Rôle « ${role.name} » mis à jour`); }}>
+                <Save size={15} aria-hidden /> Enregistrer
+              </button>
+            </div>
+          )}
         </Card>
       )}
 

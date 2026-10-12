@@ -4,12 +4,18 @@ import { newId, useCompanyData, useStore } from '../../store';
 import { Badge } from '../../components/ui';
 import { Pencil } from 'lucide-react';
 import type { Schedule } from '../../types';
-import { formatDate, formatRange, formatWeekdayShort } from '../../utils/dates';
+import { formatDate, formatRange, formatWeekdayShort, TODAY } from '../../utils/dates';
+import { scheduleDays, scheduleDayTypes, weeklyMinutes } from '../../utils/hours';
 import { scheduleUsage } from '../../utils/org';
 import { ArchivableTable, QuickAddModal } from '../../components/settingsKit';
 import { ScheduleEditor } from './ScheduleEditor';
 
 const DAY_NAMES = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+/** « Lun–Ven », « Sam », « Lun, Mer ». */
+const daysLabel = (days: number[]) => {
+  const d = [...days].sort();
+  return d.length > 2 && d.every((x, i) => i === 0 || x === d[i - 1] + 1) ? `${DAY_NAMES[d[0] - 1]}–${DAY_NAMES[d[d.length - 1] - 1]}` : d.map((x) => DAY_NAMES[x - 1]).join(', ');
+};
 
 /** Scénarios d'horaires (RH-21) : création et modification dans ScheduleEditor. */
 export function SchedulesSection() {
@@ -19,31 +25,59 @@ export function SchedulesSection() {
   return (
     <>
       <ArchivableTable
-        title="Horaires et créneaux" addLabel="Nouveau scénario" collection="schedules" onAdd={() => setEditing({})}
-        description="Scénarios d’horaires : période, créneaux, jours travaillés par département et jours exceptionnels. Ils s’affectent aux départements et sous-départements, ou aux périodes du tableau de chargement. Un horaire utilisé ne peut pas être archivé."
+        title="Scénarios d’horaires" addLabel="Nouveau scénario" collection="schedules" onAdd={() => setEditing({})}
+        description="Chaque scénario définit ses journées types (jours et créneaux), sa période et son volume hebdomadaire. Il s’affecte aux départements ou aux périodes du tableau de chargement ; un scénario utilisé ne peut pas être archivé."
         rows={data.schedules} nameOf={(s) => s.name}
         rowActions={(s) => (
           <button type="button" className="btn btn-sm btn-ghost" disabled={s.archived} onClick={() => setEditing({ schedule: s })} aria-label={`Modifier ${s.name}`}><Pencil size={13} aria-hidden /> Modifier</button>
         )}
         columns={[
-          { header: 'Horaire', render: (s) => <><span className="person-name">{s.name}</span>{s.startDate && s.endDate && <span className="block small text-muted">{formatRange(s.startDate, s.endDate)}</span>}</> },
-          { header: 'Jours travaillés', render: (s) => (
-            <span className="day-pills">{DAY_NAMES.map((d, i) => <span key={d} className={`day-pill ${s.workDays.includes(i + 1) ? 'on' : ''}`} aria-label={`${d} ${s.workDays.includes(i + 1) ? 'travaillé' : 'non travaillé'}`}>{d[0]}</span>)}</span>
+          { header: 'Scénario', render: (s) => {
+            const state = !s.startDate || !s.endDate ? undefined : s.endDate < TODAY ? 'past' : s.startDate > TODAY ? 'next' : 'now';
+            return (
+              <span className="sc-name">
+                <span className="person-name">{s.name}</span>
+                {s.startDate && s.endDate && <span className="small text-muted">{formatRange(s.startDate, s.endDate)}</span>}
+                <span className="sc-tags">
+                  {state && <Badge tone={state === 'now' ? 'success' : state === 'next' ? 'info' : 'muted'}>{state === 'now' ? 'En cours' : state === 'next' ? 'À venir' : 'Terminé'}</Badge>}
+                  {!!s.exceptionalOffDays?.length && <Badge tone="neutral">{s.exceptionalOffDays.length} jour{s.exceptionalOffDays.length > 1 ? 's' : ''} except.</Badge>}
+                </span>
+              </span>
+            );
+          } },
+          { header: 'Journées et créneaux', render: (s) => (
+            <span className="sc-days">
+              <span className="day-pills">{DAY_NAMES.map((d, i) => { const on = scheduleDays(s).includes(i + 1); return <span key={d} className={`day-pill ${on ? 'on' : ''}`} aria-label={`${d} ${on ? 'travaillé' : 'repos'}`}>{d[0]}</span>; })}</span>
+              {scheduleDayTypes(s).map((g) => (
+                <span key={g.days.join()} className="sc-type">
+                  <strong>{daysLabel(g.days)}</strong>
+                  <span>{g.slots.map((sl) => `${sl.start}–${sl.end}`).join(' · ')}</span>
+                </span>
+              ))}
+            </span>
           ) },
-          { header: 'Créneaux', render: (s) => <span className="small">{s.slots.map((sl) => `${sl.label} ${sl.start}–${sl.end}`).join(' · ')}</span> },
-          { header: 'Volume', className: 'num', render: (s) => (s.weeklyHours ? `${s.weeklyHours.toLocaleString('fr-FR')} h` : '—') },
+          { header: 'Volume', render: (s) => {
+            const computed = Math.round(weeklyMinutes(s) / 6) / 10;
+            const gap = s.weeklyHours ? Math.round((computed - s.weeklyHours) * 10) / 10 : 0;
+            return (
+              <span className="sc-vol">
+                <strong>{(s.weeklyHours ?? computed).toLocaleString('fr-FR')} h</strong>
+                <span className="small text-muted">créneaux : {computed.toLocaleString('fr-FR')} h</span>
+                {Math.abs(gap) >= 0.1 && <Badge tone={gap > 0 ? 'warning' : 'info'}>{gap > 0 ? '+' : ''}{gap.toLocaleString('fr-FR')} h</Badge>}
+              </span>
+            );
+          } },
           { header: 'Affecté à', render: (s) => {
             const u = scheduleUsage(db, s.id);
             if (!u.inUse) return <span className="text-muted small">Non utilisé</span>;
             return (
-              <span className="small">
-                {u.departments.map((d) => d.name).join(', ')}
-                {u.periods.length > 0 && <span className="block text-muted">{u.periods.length} période(s) du tableau de chargement</span>}
+              <span className="sc-usage">
+                {u.departments.map((d) => <span key={d.id} className="sc-chip">{d.name}</span>)}
+                {u.periods.length > 0 && <span className="small text-muted">{u.periods.length} période(s) du tableau de chargement</span>}
               </span>
             );
           } },
-          { header: 'Jours except.', className: 'num', render: (s) => s.exceptionalOffDays?.length || '—' },
-          { header: 'Employés', className: 'num', render: (s) => data.profiles.filter((p) => p.scheduleId === s.id).length },
+          { header: 'Employés', className: 'num', render: (s) => <strong className="num">{data.profiles.filter((p) => p.scheduleId === s.id).length}</strong> },
         ]}
         archiveBlockedBy={(s) => {
           const u = scheduleUsage(db, s.id);

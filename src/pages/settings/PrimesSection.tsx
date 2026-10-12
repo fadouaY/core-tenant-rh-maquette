@@ -6,7 +6,7 @@ import { Field, Modal } from '../../components/ui';
 import { ArchivableTable } from '../../components/settingsKit';
 import type { Prime } from '../../types';
 import { formatMoney, primeAssignments } from '../../utils/org';
-import { PRIME_PERIODICITY, PRIME_TYPE } from '../employees/EmployeeSections';
+import { PRIME_TYPE } from '../employees/EmployeeSections';
 
 /**
  * Nom unique, montant strictement positif. Archiver = désactiver : la prime n'est plus attribuable, les attributions
@@ -40,7 +40,6 @@ export function PrimesSection() {
           { header: 'Prime', render: (p) => <span className="person-name">{p.name}</span> },
           { header: 'Code', render: (p) => <span className="mono">{p.code}</span> },
           { header: 'Type', render: (p) => PRIME_TYPE[p.type] },
-          { header: 'Périodicité', render: (p) => PRIME_PERIODICITY[p.periodicity] },
           { header: 'Montant', className: 'num', render: (p) => formatMoney(p.amount, data.currency) },
           { header: 'Attribuée à', className: 'num', render: (p) => primeAssignments(db, p.id) },
         ]}
@@ -54,12 +53,12 @@ function PrimeModal({ state, onClose }: { state?: { prime?: Prime }; onClose: ()
   const { companyId, addItem, updateItem, toast } = useStore();
   const data = useCompanyData();
   const prime = state?.prime;
-  const [f, setF] = useState({ name: '', code: '', amount: '', type: 'fixe' as Prime['type'], periodicity: 'mensuelle' as Prime['periodicity'] });
+  const [f, setF] = useState({ name: '', code: '', amount: '', type: 'fixe' as Prime['type'] });
   const [submitted, setSubmitted] = useState(false);
   useEffect(() => {
     if (!state) return;
     setSubmitted(false);
-    setF({ name: prime?.name ?? '', code: prime?.code ?? '', amount: prime ? String(prime.amount) : '', type: prime?.type ?? 'fixe', periodicity: prime?.periodicity ?? 'mensuelle' });
+    setF({ name: prime?.name ?? '', code: prime?.code ?? '', amount: prime ? String(prime.amount) : '', type: prime?.type ?? 'fixe' });
   }, [state, prime]);
   if (!state) return null;
 
@@ -74,7 +73,9 @@ function PrimeModal({ state, onClose }: { state?: { prime?: Prime }; onClose: ()
     if (Object.keys(errors).length) return;
     const saved: Prime = {
       ...(prime ?? { id: newId('pr'), companyId }),
-      name: f.name.trim(), code: (f.code.trim() || f.name.trim().slice(0, 4)).toUpperCase(), amount: Number(f.amount), type: f.type, periodicity: f.periodicity,
+      name: f.name.trim(), code: (f.code.trim() || f.name.trim().slice(0, 4)).toUpperCase(), amount: Number(f.amount), type: f.type,
+      // Sans champ de périodicité : une prime ponctuelle ou exceptionnelle est versée une fois, une prime variable chaque mois.
+      periodicity: f.type === 'variable' ? 'mensuelle' : 'ponctuelle',
     };
     if (prime) updateItem('primes', saved); else addItem('primes', saved);
     toast(`Prime « ${saved.name} » ${prime ? 'mise à jour' : 'ajoutée'}`);
@@ -89,15 +90,8 @@ function PrimeModal({ state, onClose }: { state?: { prime?: Prime }; onClose: ()
         <Field label="Code" hint="Facultatif : déduit du nom.">{(id) => <input id={id} value={f.code} onChange={(e) => setF({ ...f, code: e.target.value })} />}</Field>
         <Field label="Type">
           {(id) => (
-            <select id={id} value={f.type} onChange={(e) => { const type = e.target.value as Prime['type']; setF({ ...f, type, periodicity: type === 'exceptionnelle' ? 'ponctuelle' : f.periodicity }); }}>
+            <select id={id} value={f.type} onChange={(e) => setF({ ...f, type: e.target.value as Prime['type'] })}>
               {(Object.keys(PRIME_TYPE) as Prime['type'][]).map((k) => <option key={k} value={k}>{PRIME_TYPE[k]}</option>)}
-            </select>
-          )}
-        </Field>
-        <Field label="Périodicité" required hint={f.type === 'exceptionnelle' ? 'Une prime exceptionnelle est en général ponctuelle.' : undefined}>
-          {(id) => (
-            <select id={id} value={f.periodicity} onChange={(e) => setF({ ...f, periodicity: e.target.value as Prime['periodicity'] })}>
-              {(Object.keys(PRIME_PERIODICITY) as Prime['periodicity'][]).map((k) => <option key={k} value={k}>{PRIME_PERIODICITY[k]}</option>)}
             </select>
           )}
         </Field>

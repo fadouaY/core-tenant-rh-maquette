@@ -10,7 +10,7 @@ import { Avatar, Badge, EmployeeStatusBadge } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
 import type { Employee, LeaveProfile, Prime, Role, Schedule, TimeSlot } from '../../types';
 import { diffDays, formatDate, formatDateTime, formatDayMonth, formatRange, TODAY } from '../../utils/dates';
-import { dayHours, formatDaysHours, toMinutes } from '../../utils/hours';
+import { dayHours, formatDaysHours, slotDays, slotMinutes, slotsOn, toMinutes } from '../../utils/hours';
 import { getAnnualBalance, profileRoleIds } from '../../utils/leave';
 import {
   circuitForDepartment, currentSalary, formatMoney, MARITAL_LABEL, organisationalSchedule, periodsOf, scheduleOn, uncoveredRanges,
@@ -368,7 +368,6 @@ export function OverviewTab({ employee, profile, onTab }: { employee: Employee; 
 
 const WEEK = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
 const WEEK_LONG = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
-const slotMinutes = (s: TimeSlot) => { const d = toMinutes(s.end) - toMinutes(s.start); return d > 0 ? d : d + 24 * 60; };
 const fmtH = (min: number) => `${Math.floor(min / 60)} h${min % 60 ? ` ${String(min % 60).padStart(2, '0')}` : ''}`;
 /** Pictogramme du créneau selon son heure de début : matin, après-midi, nuit. */
 const slotIcon = (s: TimeSlot) => {
@@ -381,8 +380,16 @@ const slotIcon = (s: TimeSlot) => {
 function SchedulePanel({ schedule, workDays, mode, source, status }: {
   schedule: Schedule; workDays: number[]; mode: 'organisation' | 'chargement'; source: ReactNode; status: ReactNode;
 }) {
-  const perDay = schedule.slots.reduce((sum, s) => sum + slotMinutes(s), 0);
-  const weekly = schedule.weeklyHours ?? Math.round((perDay * workDays.length) / 6) / 10;
+  // Chaque créneau s'applique à ses propres jours : heures par jour et volume en découlent.
+  const minutesOn = (day: number) => (workDays.includes(day) ? slotsOn(schedule, day).reduce((sum, s) => sum + slotMinutes(s), 0) : 0);
+  const total = WEEK.reduce((sum, _, i) => sum + minutesOn(i + 1), 0);
+  const worked = WEEK.filter((_, i) => minutesOn(i + 1) > 0).length;
+  const weekly = schedule.weeklyHours ?? Math.round(total / 6) / 10;
+  const daysLabel = (days: number[]) => {
+    const sorted = [...days].sort();
+    const consecutive = sorted.every((d, i) => i === 0 || d === sorted[i - 1] + 1);
+    return consecutive && sorted.length > 2 ? `${WEEK[sorted[0] - 1]}–${WEEK[sorted[sorted.length - 1] - 1]}` : sorted.map((d) => WEEK[d - 1]).join(', ');
+  };
   return (
     <div className="hr-panel">
       <div className="hr-panel-head">
@@ -397,12 +404,12 @@ function SchedulePanel({ schedule, workDays, mode, source, status }: {
         </div>
       </div>
 
-      <p className="hr-label">Créneaux horaires quotidiens</p>
+      <p className="hr-label">Créneaux horaires</p>
       <ul className="hr-slots">
         {schedule.slots.map((s, i) => (
           <li key={i}>
             <span className="hr-slot-icon">{slotIcon(s)}</span>
-            <span className="hr-slot-name">{s.label || `Créneau ${i + 1}`}</span>
+            <span className="hr-slot-name">{s.label || `Créneau ${i + 1}`}<span className="hr-slot-days">{daysLabel(slotDays(schedule, s))}</span></span>
             <span className="hr-slot-time">{s.start} <span aria-hidden>→</span> {s.end}</span>
             <span className="hr-slot-dur">{fmtH(slotMinutes(s))}</span>
           </li>
@@ -412,17 +419,17 @@ function SchedulePanel({ schedule, workDays, mode, source, status }: {
       <p className="hr-label">Répartition hebdomadaire des jours</p>
       <ul className="hr-days">
         {WEEK.map((d, i) => {
-          const on = workDays.includes(i + 1);
+          const min = minutesOn(i + 1);
           return (
-            <li key={d} className={on ? 'on' : 'off'} title={`${WEEK_LONG[i]} : ${on ? `travaillé, ${fmtH(perDay)}` : 'repos'}`}>
+            <li key={d} className={min ? 'on' : 'off'} title={`${WEEK_LONG[i]} : ${min ? `travaillé, ${fmtH(min)}` : 'repos'}`}>
               <span className="hr-day">{d}</span>
-              <span className="hr-day-state">{on ? 'Trav.' : 'Repos'}</span>
+              <span className="hr-day-state">{min ? fmtH(min) : 'Repos'}</span>
             </li>
           );
         })}
       </ul>
       <p className="hr-foot">
-        {workDays.length} jour{workDays.length > 1 ? 's' : ''} travaillé{workDays.length > 1 ? 's' : ''} · {fmtH(perDay)} par jour
+        {worked} jour{worked > 1 ? 's' : ''} travaillé{worked > 1 ? 's' : ''} · {fmtH(total)} par semaine
         {schedule.slots.length > 1 ? ` en ${schedule.slots.length} créneaux` : ''}
       </p>
     </div>

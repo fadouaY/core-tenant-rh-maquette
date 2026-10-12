@@ -1,12 +1,12 @@
 // Onglet « Contrats » de la fiche employé (RH-7) : synthèse du parcours, liste des contrats,
 // ajout, renouvellement, modification, clôture anticipée et suppression, chaque action étant historisée.
 import { useEffect, useState } from 'react';
-import { Ban, CalendarClock, FilePlus2, FileSignature, GitCommitHorizontal, Pencil, RefreshCw, Save, Trash2, UserCog } from 'lucide-react';
-import { newId, useStore } from '../../store';
-import type { ContractKind, ContractType, Employee, EmployeeContract, HrStatus } from '../../types';
+import { Ban, BellRing, CalendarClock, FilePlus2, FileSignature, GitCommitHorizontal, Pencil, RefreshCw, Save, Trash2, UserCog } from 'lucide-react';
+import { newId, useCompanyData, useStore } from '../../store';
+import type { ContractKind, Employee, EmployeeContract, HrStatus } from '../../types';
 import { addDays, diffDays, formatDate, TODAY } from '../../utils/dates';
 import {
-  activeContract, CONTRACT_KIND_LABEL, CONTRACT_STATUS, CONTRACT_TYPE_LABEL, contractsOf, contractStatus, effectiveEnd, overlappingContract,
+  activeContract, CONTRACT_KIND_LABEL, CONTRACT_STATUS, contractsOf, contractStatus, contractTypeDef, contractTypeName, effectiveEnd, expiryAlertDays, isFixedTerm, overlappingContract, trialEndOf,
 } from '../../utils/contracts';
 import { Badge, Field, Modal } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
@@ -20,6 +20,8 @@ type Draft = { mode: 'new' | 'renew' | 'edit'; contract: EmployeeContract; /** R
 
 export function ContractsTab({ employee }: { employee: Employee }) {
   const { saveContracts, toast } = useStore();
+  const { contractTypes: types, contractPolicies } = useCompanyData();
+  const alertDays = expiryAlertDays(contractPolicies, employee.companyId);
   const list = contractsOf(employee);
   const current = activeContract(list);
   const renewals = list.filter((c) => c.kind === 'renouvellement').length;
@@ -37,7 +39,8 @@ export function ContractsTab({ employee }: { employee: Employee }) {
     toast(message);
   };
 
-  const openNew = () => setDraft({ mode: 'new', contract: { id: newId('ctr'), kind: 'nouveau', type: 'CDI', start: current?.end ? addDays(current.end, 1) : TODAY } });
+  const firstType = types.find((t) => !t.archived);
+  const openNew = () => setDraft({ mode: 'new', contract: { id: newId('ctr'), kind: 'nouveau', type: firstType?.code ?? 'CDI', trialMonths: firstType?.trialMonths, start: current?.end ? addDays(current.end, 1) : TODAY } });
   const openRenew = () => canRenew && setDraft({
     mode: 'renew',
     renewOf: latest,
@@ -59,10 +62,10 @@ export function ContractsTab({ employee }: { employee: Employee }) {
             content: (
               <>
                 <div className="wf-card-top"><span className={`ct-kind ct-kind-${c.kind}`}>{CONTRACT_KIND_LABEL[c.kind ?? 'nouveau']}</span><Badge tone={CONTRACT_STATUS[st].tone}>{CONTRACT_STATUS[st].label}</Badge></div>
-                <p className="wf-title">{c.type} <span>{CONTRACT_TYPE_LABEL[c.type]}</span></p>
+                <p className="wf-title">{c.type} <span>{contractTypeName(types, c.type)}</span></p>
                 <p className="wf-dates">{formatDate(c.start)} <span aria-hidden>→</span> {end ? formatDate(end) : 'Indéterminée'}</p>
-                {days !== undefined && days >= 0 && <p className={`wf-meta ${days <= 30 ? 'warn' : ''}`}>Échéance dans {days} jour{days > 1 ? 's' : ''}</p>}
-                {c.trialEnd && <p className="wf-meta">Essai jusqu’au {formatDate(c.trialEnd)}</p>}
+                {days !== undefined && days >= 0 && <p className={`wf-meta ${days <= alertDays ? 'warn' : ''}`}>{days <= alertDays && <BellRing size={11} aria-hidden className="inline-icon" />} Échéance dans {days} jour{days > 1 ? 's' : ''}</p>}
+                {c.trialEnd && <p className="wf-meta">Essai{c.trialMonths ? ` de ${c.trialMonths} mois` : ""} jusqu’au {formatDate(c.trialEnd)}</p>}
                 {c.closeReason && <p className="wf-meta danger">Clôturé : {c.closeReason}</p>}
                 {c.note && <p className="wf-meta">{c.note}</p>}
               </>
@@ -100,14 +103,14 @@ export function ContractsTab({ employee }: { employee: Employee }) {
                 const st = contractStatus(c);
                 return (
                   <tr key={c.id} className={c.id === current?.id ? 'ct-current' : ''}>
-                    <td><strong>{c.type}</strong><span className="block small text-muted">{CONTRACT_TYPE_LABEL[c.type]}</span></td>
+                    <td><strong>{c.type}</strong><span className="block small text-muted">{contractTypeName(types, c.type)}</span></td>
                     <td><span className={`ct-kind ct-kind-${c.kind}`}>{CONTRACT_KIND_LABEL[c.kind ?? 'nouveau']}</span></td>
                     <td className="nowrap">{formatDate(c.start)}</td>
                     <td className="nowrap">
                       {c.closedAt ? <>{formatDate(c.closedAt)}<span className="block small text-danger">Clôture anticipée</span></>
                         : c.end ? formatDate(c.end) : <span className="text-muted">Indéterminée</span>}
                     </td>
-                    <td className="nowrap">{c.trialEnd ? formatDate(c.trialEnd) : <span className="text-muted">—</span>}</td>
+                    <td className="nowrap">{c.trialEnd ? <>{c.trialMonths ? `${c.trialMonths} mois` : formatDate(c.trialEnd)}{c.trialMonths && <span className="block small text-muted">jusqu’au {formatDate(c.trialEnd)}</span>}</> : <span className="text-muted">Aucune</span>}</td>
                     <td><Badge tone={CONTRACT_STATUS[st].tone}>{CONTRACT_STATUS[st].label}</Badge></td>
                     <td className="ct-note">{c.closeReason ? <>{c.note && <>{c.note}<br /></>}<span className="text-muted">Motif de clôture : {c.closeReason}</span></> : c.note || <span className="text-muted">—</span>}</td>
                     <td className="actions">
@@ -175,20 +178,29 @@ export function ContractsTab({ employee }: { employee: Employee }) {
 function ContractModal({ draft, list, onClose, onSave }: {
   draft?: Draft; list: EmployeeContract[]; onClose: () => void; onSave: (c: EmployeeContract, mode: Draft['mode']) => void;
 }) {
+  const types = useCompanyData().contractTypes;
   const [c, setC] = useState<EmployeeContract>();
   const [submitted, setSubmitted] = useState(false);
-  useEffect(() => { setC(draft?.contract); setSubmitted(false); }, [draft]);
+  useEffect(() => {
+    const x = draft?.contract;
+    // Ancienne saisie (date de fin d'essai sans durée) : durée déduite, arrondie au mois.
+    setC(x && x.trialEnd && !x.trialMonths ? { ...x, trialMonths: Math.max(1, Math.round((diffDays(x.start, x.trialEnd) + 1) / 30)) } : x);
+    setSubmitted(false);
+  }, [draft]);
   if (!draft || !c) return <Modal open={false} onClose={onClose} title="">{null}</Modal>;
 
   const set = <K extends keyof EmployeeContract>(k: K, v: EmployeeContract[K]) => setC((x) => (x ? { ...x, [k]: v } : x));
-  const cdi = c.type === 'CDI';
+  const cdi = !isFixedTerm(types, c.type);
   // Un CDI terminé par un renouvellement garde sa date de fin.
   const noEnd = cdi && !draft.contract.end;
   const errors: Record<string, string> = {};
   if (!c.start) errors.start = 'Date de début requise.';
   if (!cdi && !c.end) errors.end = `Date de fin requise pour un ${c.type}.`;
   else if (!noEnd && c.end && c.start && c.end <= c.start) errors.end = 'La fin doit suivre le début.';
-  if (c.trialEnd && (c.trialEnd <= c.start || (!cdi && c.end && c.trialEnd > c.end))) errors.trialEnd = 'Comprise dans la durée du contrat.';
+  const trialOn = c.trialMonths !== undefined;
+  const trialEnd = trialOn && c.start && Number(c.trialMonths) > 0 ? trialEndOf(c.start, Number(c.trialMonths)) : undefined;
+  if (trialOn && !(Number.isInteger(c.trialMonths) && c.trialMonths! >= 1 && c.trialMonths! <= 12)) errors.trialMonths = 'Entre 1 et 12 mois.';
+  else if (trialEnd && !noEnd && c.end && trialEnd > c.end) errors.trialMonths = `La période d’essai (jusqu’au ${formatDate(trialEnd)}) dépasse la fin du contrat.`;
   const renewed = draft.renewOf;
   const overlap = c.start ? overlappingContract(list.filter((x) => x.id !== renewed?.id), c.start, noEnd ? undefined : c.end, c.id) : undefined;
   if (renewed && c.start && c.start <= renewed.start) errors.start = `Doit suivre le début du contrat renouvelé (${formatDate(renewed.start)}).`;
@@ -205,7 +217,7 @@ function ContractModal({ draft, list, onClose, onSave }: {
         <button type="button" className="btn btn-primary" onClick={() => {
           setSubmitted(true);
           if (Object.keys(errors).length) return;
-          onSave({ ...c, end: noEnd ? undefined : c.end, note: c.note?.trim() || undefined }, draft.mode);
+          onSave({ ...c, end: noEnd ? undefined : c.end, trialMonths: trialOn ? c.trialMonths : undefined, trialEnd, note: c.note?.trim() || undefined }, draft.mode);
         }}>{draft.mode === 'renew' ? <><RefreshCw size={14} aria-hidden /> Renouveler</> : 'Enregistrer'}</button>
       </>}>
       {draft.mode === 'renew' && (
@@ -214,8 +226,8 @@ function ContractModal({ draft, list, onClose, onSave }: {
       <div className="form-grid">
         <Field label="Type de contrat" required>
           {(id) => (
-            <select id={id} value={c.type} onChange={(e) => set('type', e.target.value as ContractType)}>
-              {(Object.keys(CONTRACT_TYPE_LABEL) as ContractType[]).map((k) => <option key={k} value={k}>{CONTRACT_TYPE_LABEL[k]} ({k})</option>)}
+            <select id={id} value={c.type} onChange={(e) => { const type = e.target.value; setC((x) => (x ? { ...x, type, trialMonths: draft.mode === 'edit' ? x.trialMonths : contractTypeDef(types, type)?.trialMonths } : x)); }}>
+              {types.filter((t) => !t.archived || t.code === c.type).map((t) => <option key={t.id} value={t.code}>{t.name} ({t.code})</option>)}
             </select>
           )}
         </Field>
@@ -227,12 +239,23 @@ function ContractModal({ draft, list, onClose, onSave }: {
           )}
         </Field>
         <Field label="Date de début" required error={err('start')}>{(id) => <input id={id} type="date" value={c.start} onChange={(e) => set('start', e.target.value)} />}</Field>
-        <Field label="Date de fin" required={!cdi} error={err('end')} hint={noEnd ? 'Sans objet pour un CDI.' : undefined}>
+        <Field label="Date de fin" required={!cdi} error={err('end')} hint={noEnd ? 'Sans objet : contrat à durée indéterminée.' : undefined}>
           {(id) => <input id={id} type="date" value={noEnd ? '' : c.end ?? ''} disabled={noEnd} min={c.start} onChange={(e) => set('end', e.target.value || undefined)} />}
         </Field>
-        <Field label="Fin de la période d’essai" error={err('trialEnd')} hint="Facultatif.">
-          {(id) => <input id={id} type="date" value={c.trialEnd ?? ''} min={c.start} onChange={(e) => set('trialEnd', e.target.value || undefined)} />}
-        </Field>
+        <div className="span-2 trial-box">
+          <label className="fcheck">
+            <input type="checkbox" checked={trialOn} onChange={(e) => set('trialMonths', e.target.checked ? contractTypeDef(types, c.type)?.trialMonths ?? 1 : undefined)} />
+            Ce contrat comporte une période d’essai
+          </label>
+          {trialOn && (
+            <div className="trial-row">
+              <Field label="Durée de la période d’essai" required error={err('trialMonths')}>
+                {(id) => <span className="input-suffix"><input id={id} type="number" min={1} max={12} step={1} value={c.trialMonths ?? ''} onChange={(e) => set('trialMonths', e.target.value === '' ? 0 : Number(e.target.value))} /><span aria-hidden>mois</span></span>}
+              </Field>
+              {trialEnd && <p className="trial-end">Fin de la période d’essai : <strong>{formatDate(trialEnd)}</strong></p>}
+            </div>
+          )}
+        </div>
         <Field label="Note / objet" className="span-2">
           {(id) => <textarea id={id} rows={2} value={c.note ?? ''} placeholder="Ex. : avenant de passage à temps plein, renouvellement pour surcroît d’activité…" onChange={(e) => set('note', e.target.value)} />}
         </Field>
