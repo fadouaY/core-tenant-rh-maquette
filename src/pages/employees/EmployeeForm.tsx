@@ -4,13 +4,14 @@ import {
   Save, ShieldCheck, Star, Trash2, Upload, UserRound, Users,
 } from 'lucide-react';
 import { newId, useCompanyData, useStore } from '../../store';
-import type { ContractType, Employee, EmployeeContract, EmployeeDocument, LeaveProfile, MaritalStatus, Role } from '../../types';
+import type { ContractType, Employee, EmployeeContract, EmployeeDocument, HrStatus, LeaveProfile, MaritalStatus, Role } from '../../types';
 import { formatDate, TODAY } from '../../utils/dates';
 import { dayHours } from '../../utils/hours';
 import { defaultProfile, profileRoleIds } from '../../utils/leave';
 import { activeContract } from '../../utils/contracts';
+import { HR_STATUS, hrStatusOf } from '../../utils/status';
 import { circuitForDepartment, formatMoney, MARITAL_LABEL, nextMatricule, organisationalSchedule } from '../../utils/org';
-import { Alert, Avatar, Badge, Drawer, employeeStatusOptions, Field, Switch } from '../../components/ui';
+import { Alert, Avatar, Badge, Drawer, Field, Switch } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
 import { PhoneField } from '../../components/PhoneField';
 import { phoneError } from '../../utils/phone';
@@ -160,6 +161,8 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
       weeklyHours: loading ? Number(form.weeklyHours) : form.weeklyHours,
       account: { ...form.account, login: form.account.active ? linkedUser?.login ?? form.account.login : form.account.login },
       contracts: isNew ? newContracts : form.contracts,
+      hrStatus: hrStatusOf(form),
+      statusHistory: isNew ? [{ id: newId('st'), status: hrStatusOf(form), since: form.hireDate, reason: 'Statut à l’embauche' }] : form.statusHistory,
       documents,
       salaries: isNew ? [{ id: newId('sal'), amount: Number(salary), since: form.hireDate, reason: 'Salaire d’embauche' }] : form.salaries,
       primes: form.allowPrimes ? form.primes.map((p) => ({ ...p, since: isNew ? form.hireDate : p.since })) : [],
@@ -373,12 +376,12 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
               )}
             </Field>
             <Field label="Date d’embauche" required error={err('hireDate')}>{(id) => <input id={id} type="date" value={form.hireDate} onChange={(e) => set('hireDate', e.target.value)} />}</Field>
-            <Field label={isNew ? 'Statut initial' : 'Statut'} required hint={form.status === 'inactif' ? 'Un employé inactif ne peut plus déposer de demande ; son historique est conservé.' : undefined}>
-              {(id) => (
-                <select id={id} value={form.status} onChange={(e) => set('status', e.target.value as Employee['status'])}>
-                  {employeeStatusOptions.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+            <Field label={isNew ? 'Statut initial' : 'Statut'} required hint={isNew ? undefined : 'Changement daté (préavis, départ…) : onglet Contrats de la fiche.'}>
+              {(id) => isNew ? (
+                <select id={id} value={hrStatusOf(form)} onChange={(e) => { const s = e.target.value as HrStatus; setForm((f) => ({ ...f, hrStatus: s, status: HR_STATUS[s].base })); }}>
+                  {(['essai', 'actif'] as HrStatus[]).map((k) => <option key={k} value={k}>{HR_STATUS[k].label}</option>)}
                 </select>
-              )}
+              ) : <span className="input-locked"><input id={id} value={HR_STATUS[hrStatusOf(form)].label} readOnly aria-readonly /><Lock size={12} aria-hidden /></span>}
             </Field>
           </div>
 
@@ -537,7 +540,7 @@ export function EmployeeForm({ open, onClose, employee, onSaved }: {
                     <span><strong>{rolePerms.size}</strong>/{PERMISSIONS.length} permissions</span>
                   </div>
                 </div>
-                <div className="role-list" role="group" aria-label="Rôles attribués">
+                <div className="emp-role-list" role="group" aria-label="Rôles attribués">
                   {roles.map((r) => {
                     const on = roleIds.includes(r.id);
                     const primary = roleIds[0] === r.id;

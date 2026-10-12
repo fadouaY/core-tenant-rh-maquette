@@ -83,7 +83,20 @@ export interface PresencePolicy {
   effect: 'block' | 'warning';
 }
 
+/** Statut technique : « inactif » ferme l'accès aux demandes (départ effectif). Il découle du statut RH (`HrStatus`). */
 export type EmployeeStatus = 'actif' | 'essai' | 'inactif';
+
+/** Statut RH détaillé de l'employé (RH-12). */
+export type HrStatus = 'essai' | 'actif' | 'suspendu' | 'preavis' | 'demissionnaire' | 'licencie' | 'fin_contrat' | 'retraite' | 'decede';
+
+/** Changement de statut daté (parcours du statut). */
+export interface StatusChange {
+  id: ID;
+  status: HrStatus;
+  since: ISODate;
+  departureType?: string;
+  reason?: string;
+}
 
 export type MaritalStatus = 'celibataire' | 'marie' | 'divorce';
 
@@ -108,7 +121,7 @@ export interface EmployeePrime {
 }
 
 export type EmployeeHistoryKind =
-  | 'recrutement' | 'information' | 'mutation' | 'horaire' | 'planification' | 'primes' | 'salaire' | 'statut' | 'circuit' | 'contrat';
+  | 'recrutement' | 'information' | 'mutation' | 'horaire' | 'planification' | 'primes' | 'salaire' | 'statut' | 'circuit' | 'contrat' | 'document';
 
 /** Entrée de l'historique de l'employé (RH-10) : ajoutée par l'application, jamais modifiée. */
 export interface EmployeeHistoryEntry {
@@ -171,6 +184,9 @@ export interface Employee extends Person {
   /** Fin du contrat (CDD, stage) ; absente pour un CDI. */
   contractEnd?: ISODate;
   status: EmployeeStatus;
+  /** Statut RH détaillé ; absent sur une fiche ancienne : déduit de `status`. */
+  hrStatus?: HrStatus;
+  statusHistory?: StatusChange[];
   managerId?: ID;
   /** Compte d'accès ; `userId` = utilisateur du core tenant lié à la fiche. */
   account: { login: string; active: boolean; lastLogin?: string; userId?: ID };

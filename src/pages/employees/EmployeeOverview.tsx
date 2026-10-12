@@ -2,8 +2,8 @@
 // Ordre de lecture : qui est-ce et où en est-il (en-tête, repères, alertes), puis le détail par thème.
 import type { ReactNode } from 'react';
 import {
-  AlertTriangle, AtSign, Briefcase, CalendarCheck, CalendarClock, ChevronRight, Clock, Coffee, FileSignature, FileText, History, KeyRound,
-  MapPin, Moon, Paperclip, Phone, UserRound, Users, Wallet,
+  AlertTriangle, AtSign, Briefcase, Building2, CalendarCheck, CalendarClock, ChevronRight, Clock, FileSignature, FileText, History, KeyRound,
+  MapPin, Moon, Paperclip, Phone, Sunrise, Sunset, UserRound, Users, Wallet,
 } from 'lucide-react';
 import { useCompanyData, useStore } from '../../store';
 import { Avatar, Badge, EmployeeStatusBadge } from '../../components/ui';
@@ -13,14 +13,15 @@ import { diffDays, formatDate, formatDateTime, formatDayMonth, formatRange, TODA
 import { dayHours, formatDaysHours, toMinutes } from '../../utils/hours';
 import { getAnnualBalance, profileRoleIds } from '../../utils/leave';
 import {
-  circuitForDepartment, currentSalary, formatMoney, MARITAL_LABEL, periodsOf, scheduleOn, uncoveredRanges,
+  circuitForDepartment, currentSalary, formatMoney, MARITAL_LABEL, organisationalSchedule, periodsOf, scheduleOn, uncoveredRanges,
 } from '../../utils/org';
 import { formatPhone } from '../../utils/phone';
+import { hrStatusOf } from '../../utils/status';
 import { CONTRACT_KIND_LABEL, CONTRACT_STATUS, contractsOf, contractStatus, effectiveEnd } from '../../utils/contracts';
 import { PERMISSIONS } from '../../data/mock';
 import { PRIME_PERIODICITY } from './EmployeeSections';
 
-export type EmployeeTab = 'apercu' | 'temps' | 'contrats' | 'conges' | 'remuneration' | 'acces' | 'historique';
+export type EmployeeTab = 'apercu' | 'infos' | 'temps' | 'contrats' | 'documents' | 'conges' | 'remuneration' | 'acces' | 'historique';
 
 /** Ancienneté lisible : « 4 ans et 2 mois », « 3 mois », « Arrivé ce mois-ci ». */
 export function seniority(hireDate: string, today = TODAY): string {
@@ -68,7 +69,7 @@ export function EmployeeHero({ employee, profile, actions, onTab }: {
           </p>
           <div className="emp-hero-tags">
             <span className="emp-matricule">{employee.matricule}</span>
-            <EmployeeStatusBadge status={employee.status} />
+            <EmployeeStatusBadge status={employee.status} hr={hrStatusOf(employee)} />
             <Badge tone="neutral">{employee.contract}</Badge>
             {profileRoleIds(profile).map((id) => <Badge key={id} tone="primary" icon={<KeyRound size={11} aria-hidden />}>{data.role(id)?.name}</Badge>)}
             {employee.scheduleMode === 'chargement' && <Badge tone="warning" icon={<CalendarClock size={11} aria-hidden />}>Tableau de chargement</Badge>}
@@ -204,7 +205,7 @@ export function OverviewTab({ employee, profile, onTab }: { employee: Employee; 
 
       <div className="rp-grid">
         <div className="rp-col">
-          <Section icon={<UserRound size={14} />} title="Identité et état civil">
+          <Section icon={<UserRound size={14} />} title="Identité et état civil" onOpen={() => onTab('infos')} openLabel="Infos générales">
             <dl className="rp-list">
               <Row label="Matricule application"><span className="mono">{employee.matricule}</span></Row>
               <Row label="Matricule société">{employee.companyMatricule && <span className="mono">{employee.companyMatricule}</span>}</Row>
@@ -234,7 +235,7 @@ export function OverviewTab({ employee, profile, onTab }: { employee: Employee; 
             </dl>
           </Section>
 
-          <Section icon={<Clock size={14} />} title="Temps de travail et approbation" onOpen={() => onTab('temps')} openLabel="Temps de travail">
+          <Section icon={<Clock size={14} />} title="Horaire et approbation" onOpen={() => onTab('temps')} openLabel="Horaire">
             <dl className="rp-list">
               <Row label="Mode horaire" hint={loading ? (employee.loadingSince ? `Depuis le ${formatDate(employee.loadingSince)}` : undefined) : 'Hérité du rattachement'}>
                 {loading ? 'Tableau de chargement' : 'Organisationnel'}
@@ -274,7 +275,7 @@ export function OverviewTab({ employee, profile, onTab }: { employee: Employee; 
             </table>
           </Section>
 
-          <Section icon={<FileText size={15} />} title="Documents">
+          <Section icon={<FileText size={14} />} title="Documents" onOpen={() => onTab('documents')} openLabel="Documents">
             {docs.length === 0 ? <p className="rp-empty">Aucun document joint au dossier.</p> : (
               <table className="rp-table">
                 <thead><tr><th>Type</th><th>Fichier</th><th>Ajouté le</th><th>Expiration</th></tr></thead>
@@ -331,7 +332,7 @@ export function OverviewTab({ employee, profile, onTab }: { employee: Employee; 
             <p className="rp-foot">{nextLeave ? <>Prochain congé : <strong>{formatRange(nextLeave.start, nextLeave.end)}</strong></> : 'Aucun congé à venir.'}</p>
           </Section>
 
-          <Section icon={<KeyRound size={14} />} title="Compte et accès" onOpen={() => onTab('acces')} openLabel="Accès">
+          <Section icon={<KeyRound size={14} />} title="Compte, rôles et permissions" onOpen={() => onTab('acces')} openLabel="Rôles et permissions">
             <div className="rp-account">
               {user ? (
                 <span className="rp-user">
@@ -363,42 +364,68 @@ export function OverviewTab({ employee, profile, onTab }: { employee: Employee; 
   );
 }
 
-// ------------------------------------------------------------------ Temps de travail
+// ------------------------------------------------------------------ Horaire
 
-const WEEK = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+const WEEK = ['Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam', 'Dim'];
+const WEEK_LONG = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
 const slotMinutes = (s: TimeSlot) => { const d = toMinutes(s.end) - toMinutes(s.start); return d > 0 ? d : d + 24 * 60; };
 const fmtH = (min: number) => `${Math.floor(min / 60)} h${min % 60 ? ` ${String(min % 60).padStart(2, '0')}` : ''}`;
+/** Pictogramme du créneau selon son heure de début : matin, après-midi, nuit. */
+const slotIcon = (s: TimeSlot) => {
+  const start = toMinutes(s.start);
+  if (toMinutes(s.end) < start || start >= 20 * 60) return <Moon size={13} aria-hidden />;
+  return start < 12 * 60 ? <Sunrise size={13} aria-hidden /> : <Sunset size={13} aria-hidden />;
+};
 
-/** Semaine type d'un horaire : créneaux par jour travaillé, repos sinon. */
-function WeekPlan({ schedule, workDays }: { schedule: Schedule; workDays: number[] }) {
+/** Horaire détaillé : en-tête (nom, source, volume), créneaux quotidiens, répartition de la semaine. */
+function SchedulePanel({ schedule, workDays, mode, source, status }: {
+  schedule: Schedule; workDays: number[]; mode: 'organisation' | 'chargement'; source: ReactNode; status: ReactNode;
+}) {
   const perDay = schedule.slots.reduce((sum, s) => sum + slotMinutes(s), 0);
+  const weekly = schedule.weeklyHours ?? Math.round((perDay * workDays.length) / 6) / 10;
   return (
-    <>
-      <ul className="emp-week">
+    <div className="hr-panel">
+      <div className="hr-panel-head">
+        <div className="hr-panel-title">
+          <span className={`hr-mode-tag ${mode}`}>{mode === 'organisation' ? 'Organisationnel' : 'Tableau de chargement'}</span>
+          <strong>{schedule.name}</strong>
+          <span className="hr-source"><Building2 size={12} aria-hidden /> {source}</span>
+        </div>
+        <div className="hr-panel-badges">
+          <span className="hr-hours"><Clock size={12} aria-hidden /> {weekly.toLocaleString('fr-FR')} h / semaine</span>
+          {status}
+        </div>
+      </div>
+
+      <p className="hr-label">Créneaux horaires quotidiens</p>
+      <ul className="hr-slots">
+        {schedule.slots.map((s, i) => (
+          <li key={i}>
+            <span className="hr-slot-icon">{slotIcon(s)}</span>
+            <span className="hr-slot-name">{s.label || `Créneau ${i + 1}`}</span>
+            <span className="hr-slot-time">{s.start} <span aria-hidden>→</span> {s.end}</span>
+            <span className="hr-slot-dur">{fmtH(slotMinutes(s))}</span>
+          </li>
+        ))}
+      </ul>
+
+      <p className="hr-label">Répartition hebdomadaire des jours</p>
+      <ul className="hr-days">
         {WEEK.map((d, i) => {
           const on = workDays.includes(i + 1);
           return (
-            <li key={d} className={on ? '' : 'off'}>
-              <span className="emp-week-day">{d}</span>
-              {on ? (
-                <span className="emp-week-slots">
-                  {schedule.slots.map((s, k) => (
-                    <span key={k} className={`emp-slot ${toMinutes(s.end) < toMinutes(s.start) ? 'night' : ''}`}>
-                      {toMinutes(s.end) < toMinutes(s.start) && <Moon size={11} aria-hidden />}{s.start}–{s.end}
-                    </span>
-                  ))}
-                </span>
-              ) : <span className="emp-week-rest">Repos</span>}
-              <span className="emp-week-total">{on ? fmtH(perDay) : '—'}</span>
+            <li key={d} className={on ? 'on' : 'off'} title={`${WEEK_LONG[i]} : ${on ? `travaillé, ${fmtH(perDay)}` : 'repos'}`}>
+              <span className="hr-day">{d}</span>
+              <span className="hr-day-state">{on ? 'Trav.' : 'Repos'}</span>
             </li>
           );
         })}
       </ul>
-      <p className="emp-week-foot">
-        <Coffee size={12} aria-hidden /> {schedule.slots.length > 1 ? `${schedule.slots.length} créneaux par jour` : '1 créneau par jour'}
-        <span aria-hidden> · </span>{fmtH(perDay * workDays.length)} par semaine{schedule.weeklyHours ? ` (volume déclaré : ${schedule.weeklyHours.toLocaleString('fr-FR')} h)` : ''}
+      <p className="hr-foot">
+        {workDays.length} jour{workDays.length > 1 ? 's' : ''} travaillé{workDays.length > 1 ? 's' : ''} · {fmtH(perDay)} par jour
+        {schedule.slots.length > 1 ? ` en ${schedule.slots.length} créneaux` : ''}
       </p>
-    </>
+    </div>
   );
 }
 
@@ -406,25 +433,46 @@ export function WorkTimeTab({ employee, onSwitch }: { employee: Employee; onSwit
   const { db } = useStore();
   const data = useCompanyData();
   const now = scheduleOn(db, employee);
+  const org = organisationalSchedule(db, employee.departmentId, employee.subDepartmentId);
   const loading = employee.scheduleMode === 'chargement';
   const periods = periodsOf(db, employee.id).sort((a, b) => b.start.localeCompare(a.start));
   const gaps = uncoveredRanges(db, employee);
+  const inactive = employee.status === 'inactif';
 
   return (
     <div className="fstack">
-      <FormCard icon={<Clock size={16} />} title="Mode horaire"
-        subtitle={loading
-          ? `Tableau de chargement depuis le ${employee.loadingSince ? formatDate(employee.loadingSince) : '—'} : l’horaire est planifié par périodes, sans retour automatique au département.`
-          : `Horaire organisationnel : hérité — ${now.source}.`}
-        actions={<button type="button" className="btn btn-sm btn-ghost" disabled={employee.status === 'inactif'} onClick={onSwitch}>{loading ? 'Revenir à l’horaire du département' : 'Passer au tableau de chargement'}</button>}>
-        {now.schedule ? (
-          <>
-            <p className="emp-schedule-name"><strong>{now.schedule.name}</strong>{now.period && <span className="text-muted"> — période « {now.period.label} », {formatRange(now.period.start, now.period.end)}</span>}</p>
-            <WeekPlan schedule={now.schedule} workDays={workDaysFor(employee, now.schedule, !now.period)} />
-          </>
-        ) : (
-          <p className="fempty">{now.unplanned ? 'Aucune période en cours : l’employé est « Non planifié » aujourd’hui.' : 'Aucun horaire défini pour ce rattachement.'}</p>
-        )}
+      <FormCard icon={<Clock size={16} />} title="Rattachement organisationnel et mode d’horaire"
+        actions={<span className={`hr-mode-tag ${loading ? 'chargement' : 'organisation'}`}>{loading ? 'Tableau de chargement' : 'Organisationnel'}</span>}>
+        <div className="hr-mode">
+          <p className="hr-mode-title">Mode de gestion de l’horaire de travail</p>
+          <div className="hr-mode-options" role="radiogroup" aria-label="Mode d’horaire">
+            <label className={`hr-mode-option ${!loading ? 'checked' : ''} ${inactive ? 'disabled' : ''}`}>
+              <input type="radio" name="hr-mode" checked={!loading} disabled={inactive} onChange={() => loading && onSwitch()} />
+              <span><strong>Horaire organisationnel</strong> <span className="text-muted">(par défaut — hérité du département ou du sous-département)</span></span>
+            </label>
+            <label className={`hr-mode-option ${loading ? 'checked' : ''} ${inactive ? 'disabled' : ''}`}>
+              <input type="radio" name="hr-mode" checked={loading} disabled={inactive} onChange={() => !loading && onSwitch()} />
+              <span><strong>Tableau de chargement</strong> <span className="text-muted">(géré par les rotations du planning)</span></span>
+            </label>
+          </div>
+          <p className="hr-mode-hint">
+            {loading
+              ? <>Depuis le <strong>{employee.loadingSince ? formatDate(employee.loadingSince) : '—'}</strong>{employee.weeklyHours ? <> · régime contractuel <strong>{employee.weeklyHours.toLocaleString('fr-FR')} h / semaine</strong></> : null} — pas de retour automatique à l’horaire du département.</>
+              : 'Changer de mode demande une date d’effet ; le changement est inscrit dans l’historique.'}
+          </p>
+
+          {now.schedule ? (
+            <SchedulePanel schedule={now.schedule} workDays={workDaysFor(employee, now.schedule, !now.period)}
+              mode={loading ? 'chargement' : 'organisation'}
+              source={now.period ? <>Période « {now.period.label} » · {formatRange(now.period.start, now.period.end)}</> : <><strong>Source :</strong> {now.source}</>}
+              status={<Badge tone="success">Actif</Badge>} />
+          ) : (
+            <p className="hr-empty"><AlertTriangle size={14} aria-hidden /> {now.unplanned ? 'Aucune période en cours : l’employé est « Non planifié » aujourd’hui.' : 'Aucun horaire défini pour ce rattachement.'}</p>
+          )}
+          {loading && org.schedule && (
+            <p className="hr-mode-hint">Horaire du département (non appliqué) : <strong>{org.schedule.name}</strong> — {org.source}.</p>
+          )}
+        </div>
       </FormCard>
 
       {loading && (
@@ -452,4 +500,3 @@ export function WorkTimeTab({ employee, onSwitch }: { employee: Employee; onSwit
     </div>
   );
 }
-

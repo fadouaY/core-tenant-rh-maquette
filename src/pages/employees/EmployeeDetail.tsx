@@ -9,6 +9,8 @@ import { LeaveDetail } from '../leave/LeaveDetail';
 import { LeaveForm } from '../leave/LeaveForm';
 import { LeaveTable } from '../leave/LeaveTable';
 import { ContractsTab } from './EmployeeContracts';
+import { DocumentsTab } from './EmployeeDocuments';
+import { InfosTab } from './EmployeeInfos';
 import { EmployeeForm } from './EmployeeForm';
 import { AccessTab, ProfileTab } from './EmployeeLeaveTabs';
 import { EmployeeHero, OverviewTab, WorkTimeTab, type EmployeeTab } from './EmployeeOverview';
@@ -62,16 +64,19 @@ export function EmployeeDetail({ employeeId }: { employeeId: ID }) {
 
       <Tabs<EmployeeTab> label="Sections de la fiche" value={tab} onChange={setTab} tabs={[
         { id: 'apercu', label: 'Vue d’ensemble' },
-        { id: 'temps', label: 'Temps de travail' },
+        { id: 'infos', label: 'Infos générales' },
+        { id: 'temps', label: 'Horaire' },
         { id: 'contrats', label: 'Contrats', count: contractsOf(employee).length },
         { id: 'conges', label: 'Congés', count: pending || undefined },
         { id: 'remuneration', label: 'Rémunération' },
-        { id: 'acces', label: 'Accès' },
+        { id: 'acces', label: 'Rôles et permissions' },
+        { id: 'documents', label: 'Documents', count: employee.documents?.length || undefined },
         { id: 'historique', label: 'Historique', count: employee.history.length },
       ]} />
 
       <div className="emp-tab">
         {tab === 'apercu' && <OverviewTab employee={employee} profile={profile} onTab={goTo} />}
+        {tab === 'infos' && <InfosTab employee={employee} profile={profile} />}
         {tab === 'temps' && <WorkTimeTab employee={employee} onSwitch={() => setModeOpen(true)} />}
         {tab === 'contrats' && <ContractsTab employee={employee} />}
         {tab === 'conges' && (
@@ -88,6 +93,7 @@ export function EmployeeDetail({ employeeId }: { employeeId: ID }) {
         )}
         {tab === 'remuneration' && <RemunerationTab employee={employee} />}
         {tab === 'acces' && <AccessTab profile={profile} key={`a-${employee.id}`} />}
+        {tab === 'documents' && <DocumentsTab employee={employee} />}
         {tab === 'historique' && <HistoryTab employee={employee} />}
       </div>
 

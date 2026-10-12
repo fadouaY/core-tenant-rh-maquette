@@ -3,12 +3,13 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { initialDatabase } from './data/mock';
 import { ensureAdminEmployee, provisionRh } from './core/provisioning';
 import type {
-  AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, EmployeeContract, EmployeeHistoryEntry, EmployeeNumbering, HrEvent, ID, ISODate,
-  LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, TenantUser,
+  AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, EmployeeContract, EmployeeDocument, EmployeeHistoryEntry, EmployeeNumbering, HrEvent, ID, ISODate,
+  LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, StatusChange, TenantUser,
 } from './types';
-import { formatDate, formatRange, nowStamp } from './utils/dates';
+import { formatDate, formatRange, nowStamp, TODAY } from './utils/dates';
 import { countLeaveDays, deriveProfiles, toPersonView } from './utils/leave';
 import { activeContract } from './utils/contracts';
+import { HR_STATUS, hrStatusOf, statusTimeline } from './utils/status';
 import { circuitForDepartment, currencyOf, formatMoney, historyEntry, MARITAL_LABEL, nextMatricule, numberingOf, organisationalSchedule, rootDepartment, scheduleOn } from './utils/org';
 import { countAuthorization } from './utils/hours';
 
@@ -73,6 +74,13 @@ interface StoreValue {
   savePeriod: (period: LoadingPeriod) => void;
   cancelPeriod: (periodId: ID) => void;
   addSalary: (employeeId: ID, salary: Salary) => void;
+  /** Change le statut RH à une date d'effet (RH-12) ; le statut technique (accès aux demandes) en découle. */
+  setHrStatus: (employeeId: ID, change: StatusChange) => void;
+  /** Enregistre les pièces du dossier (RH-17) ; `label` décrit l'opération pour l'historique. */
+  saveDocuments: (employeeId: ID, documents: EmployeeDocument[], label: string) => void;
+  updateSalary: (employeeId: ID, salary: Salary) => void;
+  /** Retire une ligne de salaire saisie par erreur (le salaire initial est conservé). */
+  removeSalary: (employeeId: ID, salaryId: ID) => void;
   /** Enregistre le parcours contractuel (RH-7) ; le contrat en vigueur met à jour le type et l'échéance de la fiche. */
   saveContracts: (employeeId: ID, contracts: EmployeeContract[], label: string) => void;
   /** Retirer l'autorisation révoque toutes les primes actives (RH-8). */
@@ -272,6 +280,50 @@ export function StoreProvider({ children }: { children: ReactNode }) {
         return mapEmployee({ ...d, loadingPeriods: d.loadingPeriods.filter((p) => p.id !== periodId) }, period.employeeId, (e) => ({
           ...e, history: [historyEntry('planification', `Période annulée « ${period.label} » (${formatRange(period.start, period.end)})`, currentUser.id), ...e.history],
         }));
+      });
+    },
+
+    saveDocuments(employeeId, documents, label) {
+      setDb((d) => mapEmployee(d, employeeId, (e) => ({
+        ...e, documents, history: [historyEntry('document', label, currentUser.id), ...e.history],
+      })));
+    },
+
+    setHrStatus(employeeId, change) {
+      setDb((d) => mapEmployee(d, employeeId, (e) => {
+        const timeline = statusTimeline(e);
+        const before = hrStatusOf(e);
+        const statusHistory = [...timeline, change].sort((a, b) => a.since.localeCompare(b.since));
+        // Le statut en vigueur est le dernier dont la date d'effet est passée ; un statut daté dans le futur est programmé.
+        const inForce = [...statusHistory].reverse().find((s) => s.since <= TODAY) ?? change;
+        const details = [change.departureType, change.reason].filter(Boolean).join(' — ');
+        return {
+          ...e, statusHistory, hrStatus: inForce.status, status: HR_STATUS[inForce.status].base,
+          history: [historyEntry('statut', `Statut : ${HR_STATUS[before].label} → ${HR_STATUS[change.status].label} à compter du ${formatDate(change.since)}${details ? ` (${details})` : ''}`, currentUser.id, change.since), ...e.history],
+        };
+      }));
+    },
+
+    updateSalary(employeeId, salary) {
+      setDb((d) => {
+        const currency = currencyOf(d.companies.find((c) => c.id === d.employees.find((e) => e.id === employeeId)?.companyId));
+        return mapEmployee(d, employeeId, (e) => ({
+          ...e, salaries: e.salaries.map((s) => (s.id === salary.id ? salary : s)),
+          history: [historyEntry('salaire', `Salaire modifié : ${formatMoney(salary.amount, currency)} à compter du ${formatDate(salary.since)} — ${salary.reason}`, currentUser.id), ...e.history],
+        }));
+      });
+    },
+
+    removeSalary(employeeId, salaryId) {
+      setDb((d) => {
+        const currency = currencyOf(d.companies.find((c) => c.id === d.employees.find((e) => e.id === employeeId)?.companyId));
+        return mapEmployee(d, employeeId, (e) => {
+          const s = e.salaries.find((x) => x.id === salaryId);
+          return !s ? e : {
+            ...e, salaries: e.salaries.filter((x) => x.id !== salaryId),
+            history: [historyEntry('salaire', `Salaire supprimé : ${formatMoney(s.amount, currency)} du ${formatDate(s.since)} — ${s.reason}`, currentUser.id), ...e.history],
+          };
+        });
       });
     },
 
@@ -475,6 +527,12 @@ function changesOf(d: Database, before: Employee | undefined, after: Employee, a
   if (before.maritalStatus !== after.maritalStatus || before.childrenCount !== after.childrenCount) {
     out.push(historyEntry('information', `Situation familiale : ${MARITAL_LABEL[after.maritalStatus]}, ${after.childrenCount} enfant(s) (avant : ${MARITAL_LABEL[before.maritalStatus]}, ${before.childrenCount})`, actorId));
   }
+  const INFO: [keyof Employee, string][] = [
+    ['firstName', 'Prénom'], ['lastName', 'Nom'], ['matricule', 'Matricule application'], ['companyMatricule', 'Matricule société'],
+    ['birthDate', 'Date de naissance'], ['email', 'E-mail professionnel'], ['phone', 'Téléphone'], ['address', 'Adresse postale'],
+  ];
+  const changed = INFO.filter(([k]) => (before[k] ?? '') !== (after[k] ?? '')).map(([, l]) => l);
+  if (changed.length) out.push(historyEntry('information', `Informations modifiées : ${changed.join(', ')}`, actorId));
   if (before.departmentId !== after.departmentId || before.subDepartmentId !== after.subDepartmentId) {
     const name = (id?: ID) => d.departments.find((x) => x.id === id)?.name;
     const target = [name(after.departmentId), name(after.subDepartmentId)].filter(Boolean).join(' › ');

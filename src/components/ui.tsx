@@ -1,7 +1,8 @@
 // Composants d'interface réutilisables.
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react';
 import { AlertTriangle, Archive, Ban, CheckCircle2, Info, Inbox, Maximize2, Minimize2, X, XCircle } from 'lucide-react';
-import type { EmployeeStatus, EventEffect, LeaveStatus, LeaveType, Person, StepStatus } from '../types';
+import type { EmployeeStatus, EventEffect, HrStatus, LeaveStatus, LeaveType, Person, StepStatus } from '../types';
+import { HR_STATUS } from '../utils/status';
 import { useStore } from '../store';
 
 // ---------- Badges ----------
@@ -42,7 +43,9 @@ const EMP_STATUS: Record<EmployeeStatus, [string, Tone]> = {
   inactif: ['Inactif', 'muted'],
 };
 export const employeeStatusOptions = Object.entries(EMP_STATUS).map(([value, [label]]) => ({ value, label }));
-export function EmployeeStatusBadge({ status }: { status: EmployeeStatus }) {
+/** Badge de statut : le statut RH détaillé s'il est connu, sinon le statut technique. */
+export function EmployeeStatusBadge({ status, hr }: { status: EmployeeStatus; hr?: HrStatus }) {
+  if (hr) return <Badge tone={HR_STATUS[hr].tone}>{HR_STATUS[hr].label}</Badge>;
   const [label, tone] = EMP_STATUS[status];
   return <Badge tone={tone}>{label}</Badge>;
 }

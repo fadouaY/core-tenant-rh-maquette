@@ -1,15 +1,17 @@
 // Onglet « Contrats » de la fiche employé (RH-7) : synthèse du parcours, liste des contrats,
 // ajout, renouvellement, modification, clôture anticipée et suppression, chaque action étant historisée.
 import { useEffect, useState } from 'react';
-import { Ban, CalendarClock, FilePlus2, FileSignature, Pencil, RefreshCw, Trash2 } from 'lucide-react';
+import { Ban, CalendarClock, FilePlus2, FileSignature, GitCommitHorizontal, Pencil, RefreshCw, Save, Trash2, UserCog } from 'lucide-react';
 import { newId, useStore } from '../../store';
-import type { ContractKind, ContractType, Employee, EmployeeContract } from '../../types';
+import type { ContractKind, ContractType, Employee, EmployeeContract, HrStatus } from '../../types';
 import { addDays, diffDays, formatDate, TODAY } from '../../utils/dates';
 import {
   activeContract, CONTRACT_KIND_LABEL, CONTRACT_STATUS, CONTRACT_TYPE_LABEL, contractsOf, contractStatus, effectiveEnd, overlappingContract,
 } from '../../utils/contracts';
 import { Badge, Field, Modal } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
+import { Workflow } from '../../components/Workflow';
+import { DEPARTURE_TYPES, HR_STATUS, HR_STATUS_ORDER, hrStatusOf, statusTimeline } from '../../utils/status';
 
 const describe = (c: EmployeeContract) =>
   `${c.type} du ${formatDate(c.start)}${c.end ? ` au ${formatDate(c.end)}` : ' (durée indéterminée)'}`;
@@ -20,15 +22,12 @@ export function ContractsTab({ employee }: { employee: Employee }) {
   const { saveContracts, toast } = useStore();
   const list = contractsOf(employee);
   const current = activeContract(list);
-  const initial = list.find((c) => c.kind === 'initial');
   const renewals = list.filter((c) => c.kind === 'renouvellement').length;
   const amendments = list.filter((c) => c.kind === 'avenant').length;
-  const lastChange = list.find((c) => c.kind !== 'initial');
   const [draft, setDraft] = useState<Draft>();
   const [closing, setClosing] = useState<EmployeeContract>();
   const [removing, setRemoving] = useState<EmployeeContract>();
 
-  const left = current && effectiveEnd(current) ? diffDays(TODAY, effectiveEnd(current)!) : undefined;
   // Le dernier contrat du parcours se renouvelle tant qu'il n'est pas clôturé (CDI compris : il prend fin la veille du nouveau).
   const latest = list[0];
   const canRenew = !!latest && !latest.closedAt;
@@ -47,50 +46,30 @@ export function ContractsTab({ employee }: { employee: Employee }) {
 
   return (
     <div className="fstack">
-      {/* Synthèse : premier contrat, renouvellements, contrat actif */}
-      <div className="ct-summary">
-        <section className="ct-card">
-          <header><span>Premier contrat</span><Badge tone="primary">Contrat initial</Badge></header>
-          {initial ? (
-            <>
-              <p className="ct-card-title">{CONTRACT_TYPE_LABEL[initial.type]} <span>({initial.type})</span></p>
-              <dl className="ct-card-list">
-                <div><dt>Date d’effet</dt><dd>{formatDate(initial.start)}</dd></div>
-                <div><dt>Date de fin</dt><dd>{initial.end ? formatDate(initial.end) : 'Indéterminée'}</dd></div>
-                <div><dt>Période d’essai</dt><dd>{initial.trialEnd ? `Jusqu’au ${formatDate(initial.trialEnd)}` : '—'}</dd></div>
-                <div><dt>Statut</dt><dd><Badge tone={CONTRACT_STATUS[contractStatus(initial)].tone}>{CONTRACT_STATUS[contractStatus(initial)].label}</Badge></dd></div>
-              </dl>
-            </>
-          ) : <p className="ct-card-empty">Aucun contrat initial.</p>}
-        </section>
-
-        <section className="ct-card">
-          <header><span>Renouvellements et avenants</span><Badge tone={renewals + amendments ? 'info' : 'muted'}>{renewals + amendments ? 'Évolutions' : 'Aucune évolution'}</Badge></header>
-          <p className="ct-card-figure">{renewals + amendments}<small>évolution{renewals + amendments > 1 ? 's' : ''} du contrat</small></p>
-          <dl className="ct-card-list">
-            <div><dt>Renouvellements</dt><dd>{renewals}</dd></div>
-            <div><dt>Avenants</dt><dd>{amendments}</dd></div>
-            <div><dt>Dernière évolution</dt><dd>{lastChange ? `${CONTRACT_KIND_LABEL[lastChange.kind ?? 'nouveau']} — ${formatDate(lastChange.start)}` : 'Contrat initial non renouvelé'}</dd></div>
-          </dl>
-        </section>
-
-        <section className={`ct-card ${current && contractStatus(current) === 'actif' ? 'is-active' : 'is-none'}`}>
-          <header><span>Contrat actif</span>{current && <Badge tone={CONTRACT_STATUS[contractStatus(current)].tone}>{CONTRACT_STATUS[contractStatus(current)].label}</Badge>}</header>
-          {current ? (
-            <>
-              <p className="ct-card-title">{CONTRACT_TYPE_LABEL[current.type]} <span>({current.type})</span></p>
-              <dl className="ct-card-list">
-                <div><dt>Date de début</dt><dd>{formatDate(current.start)}</dd></div>
-                <div><dt>Date de fin</dt><dd>{effectiveEnd(current) ? formatDate(effectiveEnd(current)!) : 'Indéterminée'}</dd></div>
-                {left !== undefined && left >= 0 && (
-                  <div><dt>Échéance</dt><dd className={left <= 30 ? 'warn' : ''}>{left === 0 ? 'Aujourd’hui' : `Dans ${left} jour${left > 1 ? 's' : ''}`}</dd></div>
-                )}
-                <div><dt>Note</dt><dd>{current.note || <span className="text-muted">—</span>}</dd></div>
-              </dl>
-            </>
-          ) : <p className="ct-card-empty">Aucun contrat actif.</p>}
-        </section>
-      </div>
+      {/* Parcours des contrats en workflow, du premier au plus récent */}
+      <FormCard icon={<GitCommitHorizontal size={16} />} title="Parcours des contrats"
+        subtitle={`${list.length} contrat${list.length > 1 ? 's' : ''} · ${renewals} renouvellement${renewals > 1 ? 's' : ''} · ${amendments} avenant${amendments > 1 ? 's' : ''}`}>
+        <Workflow label="Parcours des contrats" steps={[...list].reverse().map((c) => {
+          const st = contractStatus(c);
+          const end = effectiveEnd(c);
+          const days = st === 'actif' && end ? diffDays(TODAY, end) : undefined;
+          return {
+            id: c.id,
+            state: st === 'actif' ? 'current' : st === 'a_venir' ? 'next' : st === 'cloture' ? 'stopped' : 'past',
+            content: (
+              <>
+                <div className="wf-card-top"><span className={`ct-kind ct-kind-${c.kind}`}>{CONTRACT_KIND_LABEL[c.kind ?? 'nouveau']}</span><Badge tone={CONTRACT_STATUS[st].tone}>{CONTRACT_STATUS[st].label}</Badge></div>
+                <p className="wf-title">{c.type} <span>{CONTRACT_TYPE_LABEL[c.type]}</span></p>
+                <p className="wf-dates">{formatDate(c.start)} <span aria-hidden>→</span> {end ? formatDate(end) : 'Indéterminée'}</p>
+                {days !== undefined && days >= 0 && <p className={`wf-meta ${days <= 30 ? 'warn' : ''}`}>Échéance dans {days} jour{days > 1 ? 's' : ''}</p>}
+                {c.trialEnd && <p className="wf-meta">Essai jusqu’au {formatDate(c.trialEnd)}</p>}
+                {c.closeReason && <p className="wf-meta danger">Clôturé : {c.closeReason}</p>}
+                {c.note && <p className="wf-meta">{c.note}</p>}
+              </>
+            ),
+          };
+        })} />
+      </FormCard>
 
       <FormCard icon={<FileSignature size={16} />} title="Parcours contractuel"
         subtitle="Tous les contrats signés par l’employé. Chaque ajout, renouvellement ou clôture est inscrit dans l’historique."
@@ -154,6 +133,8 @@ export function ContractsTab({ employee }: { employee: Employee }) {
           </table>
         </div>
       </FormCard>
+
+      <StatusCard employee={employee} />
 
       <ContractModal draft={draft} list={list} onClose={() => setDraft(undefined)} onSave={(c, mode) => {
         // Renouvellement : le contrat renouvelé prend fin la veille du nouveau s'il courait au-delà.
@@ -303,5 +284,79 @@ function CloseModal({ contract, onClose, onConfirm }: { contract?: EmployeeContr
         </div>
       )}
     </Modal>
+  );
+}
+
+// ------------------------------------------------------------------ Statut de l'employé (RH-12)
+
+function StatusCard({ employee }: { employee: Employee }) {
+  const { setHrStatus, toast } = useStore();
+  const current = hrStatusOf(employee);
+  const timeline = statusTimeline(employee);
+  const [f, setF] = useState({ status: current, since: TODAY, departureType: '', reason: '' });
+  const [submitted, setSubmitted] = useState(false);
+  useEffect(() => { setF({ status: hrStatusOf(employee), since: TODAY, departureType: '', reason: '' }); setSubmitted(false); }, [employee.id, employee.hrStatus]);
+
+  const departure = !!HR_STATUS[f.status].departure;
+  const errors: Record<string, string> = {};
+  if (f.status === current) errors.status = 'Choisissez un statut différent du statut actuel.';
+  if (!f.since) errors.since = 'Date d’effet requise.';
+  else if (f.since < employee.hireDate) errors.since = 'Postérieure à la date d’embauche.';
+  if (departure && !f.departureType) errors.departureType = 'Type de départ requis.';
+  if (!f.reason.trim() && (departure || f.status === 'suspendu')) errors.reason = 'Motif requis pour ce statut.';
+  const err = (k: string) => (submitted ? errors[k] : undefined);
+
+  const save = () => {
+    setSubmitted(true);
+    if (Object.keys(errors).length) return;
+    setHrStatus(employee.id, { id: newId('st'), status: f.status, since: f.since, departureType: departure ? f.departureType : undefined, reason: f.reason.trim() || undefined });
+    toast(`Statut : ${HR_STATUS[f.status].label}${f.since > TODAY ? ` à compter du ${formatDate(f.since)}` : ''}`);
+  };
+
+  return (
+    <FormCard icon={<UserCog size={16} />} title="Statut de l’employé"
+      subtitle="Chaque changement est daté et inscrit dans l’historique ; un statut de départ effectif ferme l’accès aux demandes."
+      actions={<Badge tone={HR_STATUS[current].tone}>{HR_STATUS[current].label}</Badge>}>
+      <Workflow label="Parcours du statut" steps={timeline.map((s, i) => {
+        const next = timeline[i + 1];
+        return {
+          id: s.id,
+          state: s.since > TODAY ? 'next' : next && next.since <= TODAY ? 'past' : 'current',
+          content: (
+            <>
+              <div className="wf-card-top"><Badge tone={HR_STATUS[s.status].tone}>{HR_STATUS[s.status].label}</Badge></div>
+              <p className="wf-dates">{s.since > TODAY ? 'À compter du' : 'Depuis le'} {formatDate(s.since)}</p>
+              {s.departureType && <p className="wf-meta">{s.departureType}</p>}
+              {s.reason && <p className="wf-meta">{s.reason}</p>}
+            </>
+          ),
+        };
+      })} />
+
+      <div className="st-form">
+        <Field label="Nouveau statut" required error={err('status')}>
+          {(id) => (
+            <select id={id} value={f.status} onChange={(e) => setF({ ...f, status: e.target.value as HrStatus, departureType: '' })}>
+              {HR_STATUS_ORDER.map((k) => <option key={k} value={k}>{HR_STATUS[k].label}{k === current ? ' (actuel)' : ''}</option>)}
+            </select>
+          )}
+        </Field>
+        <Field label="Date d’effet" required error={err('since')} hint="Pré-remplie à aujourd’hui, modifiable.">
+          {(id) => <input id={id} type="date" value={f.since} min={employee.hireDate} onChange={(e) => setF({ ...f, since: e.target.value })} />}
+        </Field>
+        <Field label="Type de départ" required={departure} error={err('departureType')} hint={departure ? undefined : 'Uniquement pour un préavis ou un départ.'}>
+          {(id) => (
+            <select id={id} value={f.departureType} disabled={!departure} onChange={(e) => setF({ ...f, departureType: e.target.value })}>
+              <option value="">{departure ? 'Sélectionner…' : '—'}</option>
+              {DEPARTURE_TYPES.map((t) => <option key={t}>{t}</option>)}
+            </select>
+          )}
+        </Field>
+        <Field label="Motif" required={departure || f.status === 'suspendu'} error={err('reason')} className="st-reason">
+          {(id) => <input id={id} value={f.reason} placeholder="Précisions…" onChange={(e) => setF({ ...f, reason: e.target.value })} />}
+        </Field>
+        <button type="button" className="btn btn-primary st-save" onClick={save}><Save size={14} aria-hidden /> Enregistrer le statut</button>
+      </div>
+    </FormCard>
   );
 }

@@ -1,12 +1,12 @@
 // Onglets de paramétrage congé et accès de la fiche employé.
 import { Fragment, useState } from 'react';
-import { Minus, Plus, RotateCcw, Save, Scale, Trash2 } from 'lucide-react';
+import { Check, Minus, Plus, RotateCcw, Save, Scale, Star, Trash2 } from 'lucide-react';
 import { PERMISSIONS } from '../../data/mock';
 import { useCompanyData, useStore } from '../../store';
 import { Badge, Field } from '../../components/ui';
-import type { ID, LeaveProfile } from '../../types';
+import type { ID, LeaveProfile, Role } from '../../types';
 import { formatDays } from '../../utils/dates';
-import { balanceTypes, getAnnualBalance, getBalance } from '../../utils/leave';
+import { balanceTypes, getAnnualBalance, getBalance, profileRoleIds } from '../../utils/leave';
 import { dayHours, formatDaysHours, formatHours } from '../../utils/hours';
 import { FormCard } from '../../components/FormCard';
 
@@ -88,14 +88,15 @@ const PERM_LABEL: Record<PermState, [string, 'success' | 'primary' | 'danger' | 
 export function AccessTab({ profile }: { profile: LeaveProfile }) {
   const { saveProfile, toast } = useStore();
   const data = useCompanyData();
-  const [roleId, setRoleId] = useState(profile.roleId);
+  const [roleIds, setRoleIds] = useState(profileRoleIds(profile));
   const [extra, setExtra] = useState(profile.extraPermissions);
   const [removed, setRemoved] = useState(profile.removedPermissions);
-  const role = data.role(roleId);
-  const dirty = roleId !== profile.roleId || extra.join() !== profile.extraPermissions.join() || removed.join() !== profile.removedPermissions.join();
+  const roles = roleIds.map((id) => data.role(id)).filter((r): r is Role => !!r);
+  const fromRoles = new Set(roles.flatMap((r) => r.permissions));
+  const dirty = roleIds.join() !== profileRoleIds(profile).join() || extra.join() !== profile.extraPermissions.join() || removed.join() !== profile.removedPermissions.join();
 
   const stateOf = (key: string): PermState => {
-    if (role?.permissions.includes(key)) return removed.includes(key) ? 'retire' : 'herite';
+    if (fromRoles.has(key)) return removed.includes(key) ? 'retire' : 'herite';
     return extra.includes(key) ? 'ajoute' : 'aucun';
   };
   const toggle = (key: string) => {
@@ -105,34 +106,43 @@ export function AccessTab({ profile }: { profile: LeaveProfile }) {
     else if (s === 'ajoute') setExtra((x) => x.filter((k) => k !== key));
     else setExtra((x) => [...x, key]);
   };
-  const changeRole = (id: string) => {
-    setRoleId(id);
-    const perms = data.role(id)?.permissions ?? [];
-    setExtra((x) => x.filter((k) => !perms.includes(k)));
-    setRemoved((r) => r.filter((k) => perms.includes(k)));
+  // Rôles cumulables : le premier est le rôle principal.
+  const changeRoles = (ids: string[]) => {
+    setRoleIds(ids);
+    const perms = new Set(ids.flatMap((id) => data.role(id)?.permissions ?? []));
+    setExtra((x) => x.filter((k) => !perms.has(k)));
+    setRemoved((r) => r.filter((k) => perms.has(k)));
   };
+  const toggleRole = (id: string) => changeRoles(roleIds.includes(id) ? roleIds.filter((x) => x !== id) : [...roleIds, id]);
   const groups = [...new Set(PERMISSIONS.map((p) => p.group))];
   const counts = PERMISSIONS.reduce((acc, p) => { acc[stateOf(p.key)]++; return acc; }, { herite: 0, ajoute: 0, retire: 0, aucun: 0 } as Record<PermState, number>);
 
   return (
     <div className="two-col access-layout">
       <section className="panel">
-        <h2 className="panel-title">Rôle et permissions</h2>
-        <Field label="Rôle">
-          {(id) => (
-            <select id={id} value={roleId} onChange={(e) => changeRole(e.target.value)}>
-              {data.roles.filter((r) => !r.archived || r.id === roleId).map((r) => <option key={r.id} value={r.id}>{r.name}{r.archived ? ' (archivé)' : ''}</option>)}
-            </select>
-          )}
-        </Field>
-        <p className="small text-muted mt-8">{role?.description}</p>
+        <h2 className="panel-title">Rôles et permissions</h2>
+        <p className="small text-muted">Un ou plusieurs rôles : leurs permissions se cumulent. Le premier coché est le rôle principal.</p>
+        <div className="emp-role-list" role="group" aria-label="Rôles attribués">
+          {data.roles.filter((r) => !r.archived || roleIds.includes(r.id)).map((r) => {
+            const on = roleIds.includes(r.id);
+            return (
+              <label key={r.id} className={`role-card ${on ? 'checked' : ''}`} title={`${r.description} — ${r.permissions.length} permission${r.permissions.length > 1 ? 's' : ''}`}>
+                <input type="checkbox" checked={on} onChange={() => toggleRole(r.id)} />
+                <span className="role-card-check" aria-hidden><Check size={11} strokeWidth={3} /></span>
+                <span className="role-card-name">{r.name}{r.archived ? ' (archivé)' : ''}</span>
+                {roleIds[0] === r.id && <Badge tone="primary" icon={<Star size={10} aria-hidden />}>Principal</Badge>}
+              </label>
+            );
+          })}
+        </div>
+        {roleIds.length === 0 && <p className="field-error mt-8">Attribuez au moins un rôle.</p>}
         <ul className="perm-summary">
-          <li><Badge tone="success">{counts.herite}</Badge> héritées du rôle</li>
+          <li><Badge tone="success">{counts.herite}</Badge> héritées des rôles</li>
           <li><Badge tone="primary">{counts.ajoute}</Badge> ajoutées individuellement</li>
           <li><Badge tone="danger">{counts.retire}</Badge> retirées individuellement</li>
         </ul>
-        <SaveBar dirty={dirty} onReset={() => { setRoleId(profile.roleId); setExtra(profile.extraPermissions); setRemoved(profile.removedPermissions); }}
-          onSave={() => { saveProfile({ ...profile, roleId, roleIds: profile.roleIds?.length ? [roleId, ...profile.roleIds.filter((x) => x !== roleId && x !== profile.roleId)] : undefined, extraPermissions: extra, removedPermissions: removed }); toast('Accès mis à jour'); }} />
+        <SaveBar dirty={dirty && roleIds.length > 0} onReset={() => { setRoleIds(profileRoleIds(profile)); setExtra(profile.extraPermissions); setRemoved(profile.removedPermissions); }}
+          onSave={() => { saveProfile({ ...profile, roleId: roleIds[0], roleIds, extraPermissions: extra, removedPermissions: removed }); toast('Rôles et permissions mis à jour'); }} />
       </section>
       <section className="panel panel-flush">
         <div className="table-wrap">

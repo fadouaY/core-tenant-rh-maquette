@@ -2,13 +2,14 @@
 // mode horaire (RH-24) et circuit hérité du département (RH-23).
 import { useEffect, useState } from 'react';
 import {
-  Ban, BadgePercent, CalendarClock, CalendarRange, CheckCircle2, ChevronRight, History, Plus, SkipForward, Trash2, UserCheck, Wallet,
+  Ban, BadgePercent, CalendarClock, CalendarRange, CheckCircle2, ChevronRight, GitCommitHorizontal, History, Pencil, Plus, SkipForward, Trash2, TrendingDown, TrendingUp, UserCheck, Wallet,
 } from 'lucide-react';
 import { navigate, newId, useCompanyData, useStore } from '../../store';
 import { Alert, Avatar, Badge, EmptyState, Field, Modal, Switch } from '../../components/ui';
 import { FormCard } from '../../components/FormCard';
-import type { Employee, EmployeeHistoryEntry, LeaveProfile, PrimePeriodicity, ScheduleMode } from '../../types';
-import { formatDate, formatRange, TODAY } from '../../utils/dates';
+import { Workflow } from '../../components/Workflow';
+import type { Employee, EmployeeHistoryEntry, LeaveProfile, PrimePeriodicity, Salary, ScheduleMode } from '../../types';
+import { addDays, formatDate, formatRange, TODAY } from '../../utils/dates';
 import {
   circuitStepsFor, currentSalary, formatMoney, organisationalSchedule, uncoveredRanges,
 } from '../../utils/org';
@@ -61,35 +62,116 @@ export function CircuitChain({ employee, profile }: { employee: Employee; profil
 
 /** Salaire de base daté et primes (RH-8). */
 export function RemunerationTab({ employee }: { employee: Employee }) {
-  const { addSalary, setPrimesAllowed, assignPrime, removePrime, toast } = useStore();
+  const { addSalary, updateSalary, removeSalary, setPrimesAllowed, assignPrime, removePrime, toast } = useStore();
   const data = useCompanyData();
-  const [salaryOpen, setSalaryOpen] = useState(false);
-  const [primeOpen, setPrimeOpen] = useState(false);
+  const [salaryEdit, setSalaryEdit] = useState<Salary | 'new'>();
+  const [removing, setRemoving] = useState<Salary>();
   const [confirmRevoke, setConfirmRevoke] = useState(false);
+  const [primeId, setPrimeId] = useState('');
+  const [primeSince, setPrimeSince] = useState(TODAY);
+  const money = (n: number) => formatMoney(n, data.currency);
+
   const current = currentSalary(employee);
-  const salaries = [...employee.salaries].sort((a, b) => b.since.localeCompare(a.since));
+  // Du plus ancien au plus récent pour calculer fin de période et progression, affiché du plus récent au plus ancien.
+  const asc = [...employee.salaries].sort((a, b) => a.since.localeCompare(b.since));
+  const initial = asc[0];
+  const rows = asc.map((s, i) => {
+    const prev = asc[i - 1];
+    const next = asc[i + 1];
+    const diff = prev ? s.amount - prev.amount : 0;
+    return {
+      s, prev, diff,
+      pct: prev && prev.amount ? (diff / prev.amount) * 100 : 0,
+      end: next ? addDays(next.since, -1) : undefined,
+      state: s === current ? 'actuel' : s.since > TODAY ? 'avenir' : 'archive',
+      nature: !prev ? 'Salaire initial' : diff > 0 ? 'Revalorisation' : diff < 0 ? 'Ajustement à la baisse' : 'Reconduction',
+    };
+  }).reverse();
+  const totalGain = current && initial && current !== initial ? current.amount - initial.amount : 0;
+  const available = data.primes.filter((p) => !p.archived && !employee.primes.some((x) => x.primeId === p.id));
 
   const togglePrimes = (allow: boolean) => {
     if (!allow && employee.primes.length > 0) { setConfirmRevoke(true); return; }
     setPrimesAllowed(employee.id, allow);
     toast(allow ? 'Primes autorisées pour cet employé' : 'Autorisation des primes retirée', 'info');
   };
+  const attribute = () => {
+    if (!primeId || !primeSince) return;
+    assignPrime(employee.id, primeId, primeSince);
+    toast('Prime attribuée');
+    setPrimeId('');
+    setPrimeSince(TODAY);
+  };
 
   return (
     <div className="fstack">
-      <FormCard icon={<Wallet size={16} />} title="Salaire de base"
-        subtitle={current ? `En vigueur : ${formatMoney(current.amount, data.currency)} par mois depuis le ${formatDate(current.since)}` : 'Aucun salaire en vigueur'}
-        actions={<button type="button" className="btn btn-sm btn-primary" onClick={() => setSalaryOpen(true)}><Plus size={14} aria-hidden /> Nouveau salaire</button>}>
+      {/* Évolution du salaire en workflow, de l'embauche au salaire le plus récent */}
+      <FormCard icon={<GitCommitHorizontal size={16} />} title="Évolution du salaire"
+        subtitle={current ? `Salaire actuel : ${money(current.amount)} brut / mois depuis le ${formatDate(current.since)}` : 'Aucun salaire en vigueur.'}>
+        {asc.length === 0 ? <p className="fempty">Aucun salaire enregistré.</p> : (
+          <Workflow label="Évolution du salaire" steps={[...rows].reverse().map(({ s, prev, diff, pct, end, state, nature }) => ({
+            id: s.id,
+            state: state === 'actuel' ? 'current' : state === 'avenir' ? 'next' : 'past',
+            content: (
+              <>
+                <div className="wf-card-top">
+                  <span className={`ct-kind ${!prev ? 'ct-kind-initial' : diff > 0 ? 'ct-kind-renouvellement' : ''}`}>{nature}</span>
+                  <Badge tone={state === 'actuel' ? 'success' : state === 'avenir' ? 'info' : 'muted'}>{state === 'actuel' ? 'Actuel' : state === 'avenir' ? 'À venir' : 'Archivé'}</Badge>
+                </div>
+                <p className="wf-amount">{money(s.amount)}<small> / mois</small></p>
+                <p className="wf-dates">{formatDate(s.since)} <span aria-hidden>→</span> {end ? formatDate(end) : 'en cours'}</p>
+                {prev ? (
+                  <span className={`sal-delta ${diff > 0 ? 'up' : diff < 0 ? 'down' : ''}`}>
+                    {diff > 0 ? <TrendingUp size={12} aria-hidden /> : diff < 0 ? <TrendingDown size={12} aria-hidden /> : null}
+                    {diff > 0 ? '+' : ''}{money(diff)} <small>{diff > 0 ? '+' : ''}{pct.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %</small>
+                  </span>
+                ) : <p className="wf-meta">Salaire d’embauche</p>}
+                {prev && <p className="wf-meta">{s.reason}</p>}
+              </>
+            ),
+          }))} />
+        )}
+      </FormCard>
+
+      <FormCard icon={<Wallet size={16} />} title="Historique des salaires de base"
+        subtitle={totalGain ? `Progression depuis l’embauche : ${totalGain > 0 ? '+' : ''}${money(totalGain)} (${totalGain > 0 ? '+' : ''}${((totalGain / initial!.amount) * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %)` : 'Chaque salaire s’applique de sa date d’effet jusqu’à la veille du suivant.'}
+        actions={<button type="button" className="btn btn-sm btn-primary" onClick={() => setSalaryEdit('new')}><Plus size={14} aria-hidden /> Nouveau salaire</button>}>
         <div className="table-wrap">
-          <table className="table">
-            <thead><tr><th scope="col">Date d’effet</th><th scope="col" className="num">Montant</th><th scope="col">Motif</th><th scope="col">État</th></tr></thead>
+          <table className="table sal-table">
+            <thead>
+              <tr>
+                <th scope="col" className="num">Montant</th>
+                <th scope="col">Nature</th>
+                <th scope="col">Date de début</th>
+                <th scope="col">Date de fin</th>
+                <th scope="col">Progression</th>
+                <th scope="col">Motif</th>
+                <th scope="col">Situation</th>
+                <th scope="col"><span className="sr-only">Actions</span></th>
+              </tr>
+            </thead>
             <tbody>
-              {salaries.map((s) => (
-                <tr key={s.id}>
+              {rows.map(({ s, prev, diff, pct, end, state, nature }) => (
+                <tr key={s.id} className={state === 'actuel' ? 'ct-current' : ''}>
+                  <td className="num"><strong className="sal-cell-amount">{money(s.amount)}</strong></td>
+                  <td><span className={`ct-kind ${!prev ? 'ct-kind-initial' : diff > 0 ? 'ct-kind-renouvellement' : ''}`}>{nature}</span></td>
                   <td className="nowrap">{formatDate(s.since)}</td>
-                  <td className="num">{formatMoney(s.amount, data.currency)}</td>
-                  <td>{s.reason}</td>
-                  <td>{s === current ? <Badge tone="success">En vigueur</Badge> : s.since > TODAY ? <Badge tone="info">À venir</Badge> : <Badge tone="muted">Antérieur</Badge>}</td>
+                  <td className="nowrap">{end ? formatDate(end) : <span className="text-muted">En cours</span>}</td>
+                  <td className="nowrap">
+                    {!prev ? <span className="text-muted">Base</span> : (
+                      <span className={`sal-delta ${diff > 0 ? 'up' : diff < 0 ? 'down' : ''}`}>
+                        {diff > 0 ? <TrendingUp size={12} aria-hidden /> : diff < 0 ? <TrendingDown size={12} aria-hidden /> : null}
+                        {diff > 0 ? '+' : ''}{money(diff)}
+                        <small>{diff > 0 ? '+' : ''}{pct.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %</small>
+                      </span>
+                    )}
+                  </td>
+                  <td className="ct-note">{s.reason}</td>
+                  <td><Badge tone={state === 'actuel' ? 'success' : state === 'avenir' ? 'info' : 'muted'}>{state === 'actuel' ? 'Actuel' : state === 'avenir' ? 'À venir' : 'Archivé'}</Badge></td>
+                  <td className="actions">
+                    <button type="button" className="icon-btn icon-btn-sm" title="Modifier" aria-label={`Modifier le salaire du ${formatDate(s.since)}`} onClick={() => setSalaryEdit(s)}><Pencil size={14} /></button>
+                    {prev && <button type="button" className="icon-btn icon-btn-sm icon-btn-danger" title="Supprimer" aria-label={`Supprimer le salaire du ${formatDate(s.since)}`} onClick={() => setRemoving(s)}><Trash2 size={14} /></button>}
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -97,45 +179,69 @@ export function RemunerationTab({ employee }: { employee: Employee }) {
         </div>
       </FormCard>
 
-      <FormCard icon={<BadgePercent size={16} />} title="Primes" subtitle="Attribuées depuis le catalogue de la société, si les primes sont autorisées pour l’employé."
-        actions={employee.allowPrimes ? <button type="button" className="btn btn-sm btn-primary" onClick={() => setPrimeOpen(true)}><Plus size={14} aria-hidden /> Attribuer une prime</button> : undefined}>
-        <Switch checked={employee.allowPrimes} onChange={togglePrimes} label="Autoriser les primes pour cet employé" />
+      <FormCard icon={<BadgePercent size={16} />} title="Primes de l’employé" subtitle="Attribuées depuis le catalogue de la société, si les primes sont autorisées pour l’employé."
+        actions={<Switch checked={employee.allowPrimes} onChange={togglePrimes} label="Autoriser les primes" />}>
         {!employee.allowPrimes ? (
-          <p className="small text-muted mt-8">Les primes ne sont pas autorisées : la section est masquée sur la vue d’ensemble.</p>
-        ) : employee.primes.length === 0 ? (
-          <EmptyState title="Aucune prime attribuée" text="Attribuez une prime du catalogue de la société." />
+          <p className="fnote"><Ban size={13} aria-hidden /> Les primes ne sont pas autorisées pour cet employé.</p>
         ) : (
-          <div className="table-wrap mt-12">
-            <table className="table">
-              <thead><tr><th scope="col">Prime</th><th scope="col">Type</th><th scope="col">Périodicité</th><th scope="col" className="num">Montant</th><th scope="col">Depuis</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
-              <tbody>
-                {employee.primes.map((ep) => {
-                  const p = data.prime(ep.primeId);
-                  return (
-                    <tr key={ep.primeId}>
-                      <td><span className="person-name">{p?.name}</span> {p?.archived && <Badge tone="muted">Désactivée au catalogue</Badge>}</td>
-                      <td>{p && PRIME_TYPE[p.type]}</td>
-                      <td>{p && PRIME_PERIODICITY[p.periodicity]}</td>
-                      <td className="num">{p ? formatMoney(p.amount, data.currency) : '—'}</td>
-                      <td className="nowrap">{formatDate(ep.since)}</td>
-                      <td className="actions">
-                        <button type="button" className="btn btn-sm btn-ghost" onClick={() => { removePrime(employee.id, ep.primeId); toast('Prime retirée', 'info'); }}>
-                          <Trash2 size={13} aria-hidden /> Retirer
-                        </button>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+          <>
+            <div className="prime-add">
+              <Field label="Prime du catalogue">
+                {(id) => (
+                  <select id={id} value={primeId} onChange={(e) => setPrimeId(e.target.value)} disabled={available.length === 0}>
+                    <option value="">{available.length ? 'Choisir une prime…' : 'Toutes les primes actives sont attribuées'}</option>
+                    {available.map((p) => <option key={p.id} value={p.id}>{p.name} — {money(p.amount)} ({PRIME_PERIODICITY[p.periodicity].toLowerCase()})</option>)}
+                  </select>
+                )}
+              </Field>
+              <Field label="Date d’effet" hint="Pré-remplie à aujourd’hui, modifiable.">
+                {(id) => <input id={id} type="date" value={primeSince} onChange={(e) => setPrimeSince(e.target.value)} />}
+              </Field>
+              <button type="button" className="btn btn-primary prime-add-btn" disabled={!primeId || !primeSince} onClick={attribute}><Plus size={14} aria-hidden /> Attribuer</button>
+            </div>
+            {employee.primes.length === 0 ? <p className="fempty mt-12">Aucune prime attribuée.</p> : (
+              <div className="table-wrap mt-12">
+                <table className="table">
+                  <thead><tr><th scope="col">Intitulé de la prime</th><th scope="col">Type</th><th scope="col">Périodicité</th><th scope="col" className="num">Montant</th><th scope="col">Date d’effet</th><th scope="col"><span className="sr-only">Actions</span></th></tr></thead>
+                  <tbody>
+                    {employee.primes.map((ep) => {
+                      const p = data.prime(ep.primeId);
+                      return (
+                        <tr key={ep.primeId}>
+                          <td><span className="person-name">{p?.name}</span> {p?.archived && <Badge tone="muted">Désactivée au catalogue</Badge>}</td>
+                          <td>{p && <span className={`prime-type ${p.type}`}>{PRIME_TYPE[p.type]}</span>}</td>
+                          <td>{p && PRIME_PERIODICITY[p.periodicity]}</td>
+                          <td className="num">{p ? <span className="sal-delta up">+{money(p.amount)}</span> : '—'}</td>
+                          <td className="nowrap">{formatDate(ep.since)}</td>
+                          <td className="actions">
+                            <button type="button" className="btn btn-sm btn-ghost ct-danger" onClick={() => { removePrime(employee.id, ep.primeId); toast('Prime retirée', 'info'); }}>
+                              <Trash2 size={13} aria-hidden /> Retirer
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </>
         )}
       </FormCard>
 
-      <SalaryModal open={salaryOpen} onClose={() => setSalaryOpen(false)}
-        onSubmit={(amount, since, reason) => { addSalary(employee.id, { id: newId('sal'), amount, since, reason }); toast('Salaire enregistré'); }} />
-      <PrimeModal open={primeOpen} employee={employee} onClose={() => setPrimeOpen(false)}
-        onSubmit={(primeId, since) => { assignPrime(employee.id, primeId, since); toast('Prime attribuée'); }} />
+      <SalaryModal open={!!salaryEdit} salary={salaryEdit === 'new' ? undefined : salaryEdit} salaries={employee.salaries} current={current}
+        onClose={() => setSalaryEdit(undefined)}
+        onSubmit={(s) => {
+          if (salaryEdit === 'new') { addSalary(employee.id, s); toast('Salaire enregistré'); } else { updateSalary(employee.id, s); toast('Salaire mis à jour'); }
+        }} />
+      <Modal open={!!removing} onClose={() => setRemoving(undefined)} title="Supprimer ce salaire ?" size="sm"
+        footer={<>
+          <span className="spacer" />
+          <button type="button" className="btn btn-ghost" onClick={() => setRemoving(undefined)}>Annuler</button>
+          <button type="button" className="btn btn-danger" onClick={() => { removeSalary(employee.id, removing!.id); setRemoving(undefined); toast('Salaire supprimé', 'info'); }}><Trash2 size={14} aria-hidden /> Supprimer</button>
+        </>}>
+        {removing && <p>Le salaire de <strong>{money(removing.amount)}</strong> du {formatDate(removing.since)} sera retiré. La suppression reste tracée dans l’historique.</p>}
+      </Modal>
       <Modal open={confirmRevoke} onClose={() => setConfirmRevoke(false)} title="Retirer l’autorisation des primes ?" size="sm"
         footer={<>
           <button type="button" className="btn btn-ghost" onClick={() => setConfirmRevoke(false)}>Annuler</button>
@@ -154,44 +260,51 @@ export const PRIME_PERIODICITY: Record<PrimePeriodicity, string> = {
   mensuelle: 'Mensuelle', trimestrielle: 'Trimestrielle', semestrielle: 'Semestrielle', annuelle: 'Annuelle', ponctuelle: 'Ponctuelle (une fois)',
 };
 
-function SalaryModal({ open, onClose, onSubmit }: { open: boolean; onClose: () => void; onSubmit: (amount: number, since: string, reason: string) => void }) {
+/** Nouveau salaire ou modification : date d'effet pré-remplie (aujourd'hui), modifiable ; progression affichée en direct. */
+function SalaryModal({ open, salary, salaries, current, onClose, onSubmit }: {
+  open: boolean; salary?: Salary; salaries: Salary[]; current?: Salary; onClose: () => void; onSubmit: (s: Salary) => void;
+}) {
   const data = useCompanyData();
   const [f, setF] = useState({ amount: '', since: TODAY, reason: '' });
   const [submitted, setSubmitted] = useState(false);
-  useEffect(() => { if (open) { setF({ amount: '', since: TODAY, reason: '' }); setSubmitted(false); } }, [open]);
-  const errors = { amount: Number(f.amount) > 0 ? '' : 'Montant strictement positif.', since: f.since ? '' : 'Date d’effet requise.', reason: f.reason.trim() ? '' : 'Motif requis.' };
-  const save = () => { setSubmitted(true); if (errors.amount || errors.since || errors.reason) return; onSubmit(Number(f.amount), f.since, f.reason.trim()); onClose(); };
+  useEffect(() => {
+    if (open) { setF(salary ? { amount: String(salary.amount), since: salary.since, reason: salary.reason } : { amount: '', since: TODAY, reason: '' }); setSubmitted(false); }
+  }, [open, salary]);
+  const amount = Number(f.amount);
+  // Salaire de référence : celui qui précède la date d'effet saisie.
+  const before = [...salaries].filter((s) => s.id !== salary?.id && s.since < f.since).sort((a, b) => b.since.localeCompare(a.since))[0] ?? (salary ? undefined : current);
+  const diff = before && amount > 0 ? amount - before.amount : undefined;
+  const errors = {
+    amount: amount > 0 ? '' : 'Montant strictement positif.',
+    since: !f.since ? 'Date d’effet requise.' : salaries.some((s) => s.id !== salary?.id && s.since === f.since) ? 'Un salaire existe déjà à cette date.' : '',
+    reason: f.reason.trim() ? '' : 'Motif requis.',
+  };
+  const save = () => {
+    setSubmitted(true);
+    if (errors.amount || errors.since || errors.reason) return;
+    onSubmit({ id: salary?.id ?? newId('sal'), amount, since: f.since, reason: f.reason.trim() });
+    onClose();
+  };
   return (
-    <Modal open={open} onClose={onClose} title="Nouveau salaire de base"
-      footer={<><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" onClick={save}>Enregistrer</button></>}>
+    <Modal open={open} onClose={onClose} title={salary ? 'Modifier le salaire' : 'Nouveau salaire de base'}
+      footer={<><span className="spacer" /><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" onClick={save}>Enregistrer</button></>}>
       <div className="form-grid">
-        <Field label={`Montant mensuel (${data.currency})`} required error={submitted ? errors.amount : undefined}>{(id) => <input id={id} type="number" min={0} step={100} value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} />}</Field>
-        <Field label="Date d’effet" required error={submitted ? errors.since : undefined}>{(id) => <input id={id} type="date" value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })} />}</Field>
-        <Field label="Motif" required className="span-2" error={submitted ? errors.reason : undefined}>{(id) => <input id={id} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} placeholder="Ex. : revalorisation annuelle" />}</Field>
+        <Field label={`Montant mensuel brut (${data.currency})`} required error={submitted ? errors.amount : undefined}>
+          {(id) => <span className="input-suffix"><input id={id} type="number" min={0} step={100} value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /><span aria-hidden>{data.currency}</span></span>}
+        </Field>
+        <Field label="Date d’effet" required error={submitted ? errors.since : undefined} hint={salary ? undefined : 'Pré-remplie à aujourd’hui, modifiable.'}>
+          {(id) => <input id={id} type="date" value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })} />}
+        </Field>
+        <Field label="Motif" required className="span-2" error={submitted ? errors.reason : undefined}>
+          {(id) => <input id={id} value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} placeholder="Ex. : revalorisation annuelle" />}
+        </Field>
       </div>
-    </Modal>
-  );
-}
-
-function PrimeModal({ open, employee, onClose, onSubmit }: { open: boolean; employee: Employee; onClose: () => void; onSubmit: (primeId: string, since: string) => void }) {
-  const data = useCompanyData();
-  const available = data.primes.filter((p) => !p.archived && !employee.primes.some((x) => x.primeId === p.id));
-  const [f, setF] = useState({ primeId: '', since: TODAY });
-  useEffect(() => { if (open) setF({ primeId: available[0]?.id ?? '', since: TODAY }); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [open]);
-  return (
-    <Modal open={open} onClose={onClose} title="Attribuer une prime"
-      footer={<><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" disabled={!f.primeId || !f.since} onClick={() => { onSubmit(f.primeId, f.since); onClose(); }}>Attribuer</button></>}>
-      {available.length === 0 ? <EmptyState title="Aucune prime disponible" text="Toutes les primes actives du catalogue sont déjà attribuées, ou le catalogue est vide." /> : (
-        <div className="form-grid">
-          <Field label="Prime du catalogue" required>
-            {(id) => (
-              <select id={id} value={f.primeId} onChange={(e) => setF({ ...f, primeId: e.target.value })}>
-                {available.map((p) => <option key={p.id} value={p.id}>{p.name} — {formatMoney(p.amount, data.currency)} ({PRIME_PERIODICITY[p.periodicity].toLowerCase()})</option>)}
-              </select>
-            )}
-          </Field>
-          <Field label="Date d’effet" required>{(id) => <input id={id} type="date" value={f.since} onChange={(e) => setF({ ...f, since: e.target.value })} />}</Field>
-        </div>
+      {diff !== undefined && before && (
+        <p className={`sal-preview ${diff > 0 ? 'up' : diff < 0 ? 'down' : ''}`}>
+          {diff > 0 ? <TrendingUp size={14} aria-hidden /> : diff < 0 ? <TrendingDown size={14} aria-hidden /> : null}
+          Progression par rapport au salaire du {formatDate(before.since)} ({formatMoney(before.amount, data.currency)}) :
+          <strong> {diff > 0 ? '+' : ''}{formatMoney(diff, data.currency)} ({diff > 0 ? '+' : ''}{((diff / before.amount) * 100).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} %)</strong>
+        </p>
       )}
     </Modal>
   );
@@ -199,7 +312,7 @@ function PrimeModal({ open, employee, onClose, onSubmit }: { open: boolean; empl
 
 const KIND_LABEL: Record<EmployeeHistoryEntry['kind'], string> = {
   recrutement: 'Recrutement', information: 'Information générale', mutation: 'Rattachement', horaire: 'Mode horaire',
-  planification: 'Tableau de chargement', primes: 'Primes', salaire: 'Salaire', statut: 'Statut', circuit: 'Circuit', contrat: 'Contrat',
+  planification: 'Tableau de chargement', primes: 'Primes', salaire: 'Salaire', statut: 'Statut', circuit: 'Circuit', contrat: 'Contrat', document: 'Document',
 };
 
 /** Historique chronologique, en lecture seule (RH-10). */

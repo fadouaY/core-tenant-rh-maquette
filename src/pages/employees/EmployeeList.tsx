@@ -1,8 +1,9 @@
 import { useMemo, useState } from 'react';
 import { Eye, Link2, Plus, RotateCcw, Search, Users } from 'lucide-react';
 import { navigate, useCompanyData, useStore } from '../../store';
-import { Avatar, Badge, EmployeeStatusBadge, employeeStatusOptions, EmptyState, PageHeader, SelectFilter } from '../../components/ui';
+import { Avatar, Badge, EmployeeStatusBadge, EmptyState, PageHeader, SelectFilter } from '../../components/ui';
 import { profileRoleIds } from '../../utils/leave';
+import { HR_STATUS, HR_STATUS_ORDER, hrStatusOf } from '../../utils/status';
 import type { Employee } from '../../types';
 import { EmployeeForm } from './EmployeeForm';
 
@@ -21,7 +22,7 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
       .filter((e) => !s || `${e.firstName} ${e.lastName} ${e.matricule} ${e.companyMatricule ?? ""} ${e.email}`.toLowerCase().includes(s))
       .filter((e) => !departmentId || e.departmentId === departmentId)
       .filter((e) => !functionId || e.functionId === functionId)
-      .filter((e) => !status || e.status === status)
+      .filter((e) => !status || hrStatusOf(e) === status)
       .filter((e) => !mode || (mode === 'non-planifie' ? e.scheduleMode === 'chargement' && !data.profile(e.id)?.scheduleId : e.scheduleMode === mode))
       .sort((a, b) => a.lastName.localeCompare(b.lastName, 'fr'));
   }, [data, q, departmentId, functionId, status, mode]);
@@ -50,7 +51,7 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
           options={data.departments.map((d) => ({ value: d.id, label: d.name + (d.archived ? ' (archivé)' : '') }))} />
         <SelectFilter label="Fonction" value={functionId} onChange={setFunctionId} allLabel="Toutes"
           options={data.functions.filter((f) => !departmentId || f.departmentId === departmentId).map((f) => ({ value: f.id, label: f.name + (f.archived ? ' (archivée)' : '') }))} />
-        <SelectFilter label="Statut" value={status} onChange={setStatus} options={employeeStatusOptions} />
+        <SelectFilter label="Statut" value={status} onChange={setStatus} options={HR_STATUS_ORDER.map((k) => ({ value: k, label: HR_STATUS[k].label }))} />
         <SelectFilter label="Mode horaire" value={mode} onChange={setMode}
           options={[{ value: 'organisation', label: 'Organisationnel' }, { value: 'chargement', label: 'Tableau de chargement' }, { value: 'non-planifie', label: 'Non planifié' }]} />
         {hasFilters && <button type="button" className="btn btn-sm btn-ghost filter-reset" onClick={reset}><RotateCcw size={13} aria-hidden /> Réinitialiser</button>}
@@ -92,7 +93,7 @@ export function EmployeeList({ addOpen }: { addOpen: boolean }) {
                     <td>{user
                       ? <span className="emp-account"><Link2 size={12} aria-hidden /><span><span className="mono">{user.login}</span>{user.status === 'invite' && <span className="block small text-warning">Invitation envoyée</span>}</span></span>
                       : <span className="small text-muted">Non associé</span>}</td>
-                    <td><EmployeeStatusBadge status={e.status} /></td>
+                    <td><EmployeeStatusBadge status={e.status} hr={hrStatusOf(e)} /></td>
                     <td className="col-roles">
                       {profile && <span className="role-tags">{profileRoleIds(profile).map((id, i) => <span key={id} className={`role-tag ${i === 0 ? 'primary' : ''}`}>{data.role(id)?.name}</span>)}</span>}
                     </td>
