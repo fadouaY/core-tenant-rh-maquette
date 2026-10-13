@@ -2,7 +2,7 @@
 import type {
   AppAssignment, AppInfo, FunctionLink, PresencePolicy, TenantUser, UserAccess,
   ApprovalCircuit, ApprovalStep, Company, Database, Department, Employee, HistoryEntry, Holiday, HrEvent,
-  JobFunction, LeaveProfile, LeaveRequest, LeaveRule, LeaveType, LoadingPeriod, Notification, DocumentType, ContractPolicy, ContractTypeDef, EmployeeNumbering, Permission, Prime, Role, Schedule, Country,
+  JobFunction, LeaveProfile, LeaveRequest, LeaveRule, LeaveType, LoadingPeriod, Notification, DocumentType, ContractPolicy, ContractTypeDef, CurrencySetting, EmployeeNumbering, Permission, Prime, Role, Schedule, Country,
 } from '../types';
 import { countLeaveDays, deriveProfiles } from '../utils/leave';
 import { formatRange } from '../utils/dates';
@@ -119,6 +119,12 @@ const functionLinks: FunctionLink[] = [
 ];
 
 /** Types de congé soumis aux règles de présence (les absences non planifiées, comme la maladie, en sont exclues). */
+/** Devise des salaires et primes, par société. */
+const currencies: CurrencySetting[] = [
+  { companyId: 'c1', symbol: 'DH', code: 'MAD', label: 'Dirhams' },
+  { companyId: 'c2', symbol: '€', code: 'EUR', label: 'Euros' },
+];
+
 /** Alerte d'expiration des contrats : délai de notification avant l'échéance, par société. */
 const contractPolicies: ContractPolicy[] = [
   { companyId: 'c1', expiryAlertDays: 30 },
@@ -484,7 +490,7 @@ function withFunctionCodes(list: JobFunction[]): JobFunction[] {
 function buildDatabase(): Database {
   const base: Database = {
     tenant: { name: 'Groupe Atlas', ownerUserId: 'u1', plan: 'Offre Business', maxCompanies: 5, maxUsers: 10 }, apps: APPS, assignments, users, accesses,
-    companies, departments, functions: withFunctionCodes(functions), functionLinks, presencePolicies, contractPolicies, employees, profiles, schedules, leaveTypes, leaveRules, holidays, countries, roles, circuits,
+    companies, departments, functions: withFunctionCodes(functions), functionLinks, presencePolicies, contractPolicies, currencies, employees, profiles, schedules, leaveTypes, leaveRules, holidays, countries, roles, circuits,
     primes, documentTypes: documentTypes.map((t) => ({ maxSizeMb: t.formats.includes('docx') ? 10 : 5, ...t })), contractTypes, numberings, loadingPeriods, requests: [], events, notifications,
   };
   base.requests = requestSeeds.map((r) => {

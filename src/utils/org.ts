@@ -1,7 +1,7 @@
 // Règles métier du rattachement organisationnel : circuit hérité du département (RH-22, RH-23),
 // horaire organisationnel ou tableau de chargement (RH-6, RH-21, RH-24 à RH-26), primes (RH-8, RH-27).
 import type {
-  ApprovalCircuit, Company, Database, Department, Employee, EmployeeHistoryEntry, EmployeeNumbering, Holiday, ID, NumberingEntity, ISODate, LoadingPeriod, Schedule,
+  ApprovalCircuit, Company, CurrencySetting, Database, Department, Employee, EmployeeHistoryEntry, EmployeeNumbering, Holiday, ID, NumberingEntity, ISODate, LoadingPeriod, Schedule,
 } from '../types';
 import { addDays, isoWeekday, TODAY } from './dates';
 
@@ -164,9 +164,19 @@ export function scheduleUsage(db: Database, scheduleId: ID) {
 const CURRENCY_BY_COUNTRY: Record<string, string> = { Maroc: 'MAD', France: 'EUR', Tunisie: 'TND' };
 export const currencyOf = (company?: Pick<Company, 'country'>) => CURRENCY_BY_COUNTRY[company?.country ?? ''] ?? 'EUR';
 
-export function formatMoney(amount: number, currency: string) {
-  return new Intl.NumberFormat('fr-FR', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount);
+/** Devise d'une société : son paramétrage, sinon le code ISO déduit du pays (symbole = code). */
+export function currencySettingOf(db: Pick<Database, 'currencies' | 'companies'>, companyId: ID): CurrencySetting {
+  const found = db.currencies.find((c) => c.companyId === companyId);
+  if (found) return found;
+  const code = currencyOf(db.companies.find((c) => c.id === companyId));
+  return { companyId, symbol: code, code, label: code };
 }
+
+/** Montant suivi du symbole de la devise : « 10 740 DT », « 1 250,5 € ». */
+export function formatMoney(amount: number, symbol: string) {
+  return `${new Intl.NumberFormat('fr-FR', { maximumFractionDigits: 2 }).format(amount)} ${symbol}`;
+}
+
 
 /** Salaire en vigueur : le plus récent dont la date d'effet est passée. */
 export function currentSalary(e: Pick<Employee, 'salaries'>, date: ISODate = TODAY) {

@@ -4,13 +4,13 @@ import { initialDatabase } from './data/mock';
 import { ensureAdminEmployee, provisionRh } from './core/provisioning';
 import type {
   AppAssignment, ApprovalCircuit, Company, Database, PresencePolicy, DayPart, Employee, EmployeeContract, EmployeeDocument, EmployeeHistoryEntry, EmployeeNumbering, HrEvent, ID, ISODate,
-  ContractPolicy, LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, StatusChange, TenantUser,
+  ContractPolicy, CurrencySetting, LeaveProfile, LeaveRequest, LoadingPeriod, Role, Salary, Schedule, ScheduleMode, StatusChange, TenantUser,
 } from './types';
 import { formatDate, formatRange, nowStamp, TODAY } from './utils/dates';
 import { countLeaveDays, deriveProfiles, toPersonView } from './utils/leave';
 import { activeContract, expiringContracts } from './utils/contracts';
 import { HR_STATUS, hrStatusOf, statusTimeline } from './utils/status';
-import { circuitForDepartment, currencyOf, formatMoney, historyEntry, MARITAL_LABEL, nextMatricule, numberingOf, organisationalSchedule, withNumbering, rootDepartment, scheduleOn } from './utils/org';
+import { circuitForDepartment, currencySettingOf, formatMoney, historyEntry, MARITAL_LABEL, nextMatricule, numberingOf, organisationalSchedule, withNumbering, rootDepartment, scheduleOn } from './utils/org';
 import { countAuthorization } from './utils/hours';
 
 export type CollectionKey =
@@ -105,6 +105,8 @@ interface StoreValue {
   setPresencePolicy: (policy: PresencePolicy) => void;
   /** Délai d'alerte d'expiration des contrats ; les employés concernés font l'objet d'une notification. */
   setContractPolicy: (policy: ContractPolicy) => void;
+  /** Devise d'affichage et de saisie des salaires et primes de la société. */
+  saveCurrency: (setting: CurrencySetting) => void;
   markNotificationsRead: () => void;
 }
 
@@ -308,7 +310,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     updateSalary(employeeId, salary) {
       setDb((d) => {
-        const currency = currencyOf(d.companies.find((c) => c.id === d.employees.find((e) => e.id === employeeId)?.companyId));
+        const currency = currencySettingOf(d, d.employees.find((e) => e.id === employeeId)?.companyId ?? '').symbol;
         return mapEmployee(d, employeeId, (e) => ({
           ...e, salaries: e.salaries.map((s) => (s.id === salary.id ? salary : s)),
           history: [historyEntry('salaire', `Salaire modifié : ${formatMoney(salary.amount, currency)} à compter du ${formatDate(salary.since)} — ${salary.reason}`, currentUser.id), ...e.history],
@@ -318,7 +320,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     removeSalary(employeeId, salaryId) {
       setDb((d) => {
-        const currency = currencyOf(d.companies.find((c) => c.id === d.employees.find((e) => e.id === employeeId)?.companyId));
+        const currency = currencySettingOf(d, d.employees.find((e) => e.id === employeeId)?.companyId ?? '').symbol;
         return mapEmployee(d, employeeId, (e) => {
           const s = e.salaries.find((x) => x.id === salaryId);
           return !s ? e : {
@@ -331,7 +333,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
     addSalary(employeeId, salary) {
       setDb((d) => {
-        const currency = currencyOf(d.companies.find((c) => c.id === d.employees.find((e) => e.id === employeeId)?.companyId));
+        const currency = currencySettingOf(d, d.employees.find((e) => e.id === employeeId)?.companyId ?? '').symbol;
         return mapEmployee(d, employeeId, (e) => ({
           ...e, salaries: [...e.salaries, salary],
           history: [historyEntry('salaire', `Salaire de base ${formatMoney(salary.amount, currency)} à compter du ${formatDate(salary.since)} — ${salary.reason}`, currentUser.id, salary.since), ...e.history],
@@ -487,6 +489,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       setDb((d) => ({ ...d, [key]: [...(d[key] as unknown[]), item] }));
     },
 
+    saveCurrency(setting) {      setDb((d) => ({ ...d, currencies: [...d.currencies.filter((x) => x.companyId !== setting.companyId), setting] }));    },
     setContractPolicy(policy) {
       setDb((d) => {
         const next = { ...d, contractPolicies: [...d.contractPolicies.filter((x) => x.companyId !== policy.companyId), policy] };
@@ -610,7 +613,8 @@ export function useCompanyData() {
       contractTypes: by(db.contractTypes),
       prime: (id?: ID) => db.primes.find((p) => p.id === id),
       loadingPeriods: by(db.loadingPeriods),
-      currency: currencyOf(db.companies.find((c) => c.id === companyId)),
+      currency: currencySettingOf(db, companyId).symbol,
+      currencySetting: currencySettingOf(db, companyId),
       requests: by(db.requests),
       events: by(db.events),
       notifications: by(db.notifications),

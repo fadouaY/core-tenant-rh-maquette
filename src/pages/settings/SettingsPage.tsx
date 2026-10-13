@@ -1,4 +1,4 @@
-import { BadgePercent, Briefcase, Building2, CalendarCheck, CalendarOff, Clock, FileSignature, FileText, GitBranch, Globe, IdCard, ListChecks, Settings, ShieldCheck } from 'lucide-react';
+import { BadgePercent, Briefcase, Coins, Building2, CalendarCheck, CalendarOff, Clock, FileSignature, FileText, GitBranch, Globe, IdCard, ListChecks, Settings, ShieldCheck } from 'lucide-react';
 import { useCompanyData } from '../../store';
 import { PageHeader } from '../../components/ui';
 import { CircuitsSection } from './CircuitsSection';
@@ -12,6 +12,7 @@ import { PrimesSection } from './PrimesSection';
 import { DocumentTypesSection } from './DocumentTypesSection';
 import { NumberingSection } from './NumberingSection';
 import { ContractTypesSection } from './ContractTypesSection';
+import { CurrencySection } from './CurrencySection';
 
 /** Sous-sections des paramètres, dans l'ordre de la sous-navigation du shell. */
 export const SETTINGS_SECTIONS = [
@@ -27,6 +28,7 @@ export const SETTINGS_SECTIONS = [
   { id: 'types-conge', group: 'Congés', label: 'Types de congé', icon: CalendarCheck, Component: LeaveTypesSection },
   { id: 'regles', group: 'Congés', label: 'Règles et quotas', icon: ListChecks, Component: RulesAndPresence },
   { id: 'jours-feries', group: 'Congés', label: 'Jours fériés', icon: CalendarOff, Component: HolidaysSection },
+  { id: 'devise', group: 'Référentiels', label: 'Devise', icon: Coins, Component: CurrencySection },
   { id: 'pays', group: 'Référentiels', label: 'Pays et téléphone', icon: Globe, Component: CountriesSection },
 ] as const;
 

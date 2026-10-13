@@ -136,6 +136,7 @@ export interface EmployeeHistoryEntry {
 /** Code d'un type de contrat du catalogue de la société (ex. « CDI », « CDD »). */
 export type ContractType = string;
 
+/** Devise d'affichage et de saisie des salaires et primes d'une société (ex. DT · TND · Dinars). */export interface CurrencySetting {  companyId: ID;  /** Symbole affiché après les montants (ex. « DT »). */  symbol: string;  /** Code ISO 4217 (ex. « TND »). */  code: string;  /** Libellé en toutes lettres (ex. « Dinars »). */  label: string;}
 /** Alerte d'expiration des contrats d'une société : nombre de jours avant l'échéance où l'utilisateur est notifié. */export interface ContractPolicy {  companyId: ID;  expiryAlertDays: number;}
 /** Type de contrat paramétré par la société. Archivé = plus proposé ; les contrats existants le conservent. */
 export interface ContractTypeDef extends Archivable {
@@ -588,6 +589,7 @@ export interface Database {
   functionLinks: FunctionLink[];
   presencePolicies: PresencePolicy[];
   contractPolicies: ContractPolicy[];
+  currencies: CurrencySetting[];
   employees: Employee[];
   profiles: LeaveProfile[];
   schedules: Schedule[];

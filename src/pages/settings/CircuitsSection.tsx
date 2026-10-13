@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Bell, Building2, ChevronRight, Eye, Info, ListChecks, Pencil, Plus, Save, SkipForward, Trash2, UserCheck } from 'lucide-react';
+import { Archive, ArchiveRestore, ArrowDown, ArrowUp, Bell, Briefcase, Building2, ChevronRight, Eye, Info, ListChecks, Pencil, Plus, Save, SkipForward, Trash2, UserCheck } from 'lucide-react';
 import { newId, useCompanyData, useStore } from '../../store';
 import { Alert, ArchivedBadge, Avatar, Badge, Card, Drawer, Field, Switch } from '../../components/ui';
 import type { ApprovalCircuit, CircuitIntervention, CircuitStep } from '../../types';
@@ -157,13 +157,15 @@ function CircuitEditor({ circuit, onClose, onSave }: { circuit: ApprovalCircuit;
 
   const setStep = (i: number, patch: Partial<CircuitStep>) => setC((x) => ({ ...x, steps: x.steps.map((s, j) => (j === i ? { ...s, ...patch } : s)) }));
   const move = (i: number, d: -1 | 1) => setC((x) => { const steps = [...x.steps]; [steps[i], steps[i + d]] = [steps[i + d], steps[i]]; return { ...x, steps }; });
+  /** Fonction affichée pour un niveau : celle de la personne nommée, sinon le rôle dynamique. */
+  const fnOf = (s: CircuitStep) => (s.kind === 'employee' ? data.person(s.employeeId)?.functionName ?? s.label : s.kind === 'manager' ? 'Manager direct (N+1)' : 'Responsable du département');
   const setApprover = (i: number, value: string) => {
-    const step = c.steps[i];
     if (value === 'manager' || value === 'departmentHead') {
-      setStep(i, { kind: value, employeeId: undefined, label: step.label || (value === 'manager' ? 'Responsable hiérarchique direct' : 'Responsable du département') });
+      setStep(i, { kind: value, employeeId: undefined, label: value === 'manager' ? 'Manager direct (N+1)' : 'Responsable du département' });
     } else {
       const p = data.person(value.replace('emp:', ''));
-      setStep(i, { kind: 'employee', employeeId: p?.id, label: step.label || p?.functionName || '' });
+      // Le niveau affiche la fonction de l'approbateur choisi.
+      setStep(i, { kind: 'employee', employeeId: p?.id, label: p?.functionName ?? '' });
     }
   };
 
@@ -172,13 +174,12 @@ function CircuitEditor({ circuit, onClose, onSave }: { circuit: ApprovalCircuit;
   const dateError = !c.effectiveDate ? 'Date d’effet requise.' : undefined;
   const stepError = c.steps.length === 0 ? 'Ajoutez au moins un niveau.'
     : c.steps.some((s) => !approverValue(s)) ? 'Choisissez l’approbateur de chaque niveau.'
-    : c.steps.some((s) => !s.label.trim()) ? 'Renseignez le rôle / libellé de chaque niveau.'
     : c.steps.every((s) => s.intervention === 'consultation') ? 'Au moins un niveau doit exiger une approbation.' : undefined;
 
   const save = () => {
     setSubmitted(true);
     if (nameError || depError || dateError || stepError) return;
-    onSave({ ...c, name: c.name.trim(), exempt: false, steps: c.steps.map((s) => ({ ...s, label: s.label.trim(), intervention: s.intervention ?? 'approbation' })) });
+    onSave({ ...c, name: c.name.trim(), exempt: false, steps: c.steps.map((s) => ({ ...s, label: fnOf(s), intervention: s.intervention ?? 'approbation' })) });
   };
 
   return (
@@ -216,7 +217,7 @@ function CircuitEditor({ circuit, onClose, onSave }: { circuit: ApprovalCircuit;
           <div className="ci-steps-head">
             <div>
               <p className="ci-title"><ListChecks size={15} aria-hidden /> Chaîne ordonnée des niveaux d’approbation</p>
-              <p className="small text-muted">Du niveau le plus bas au plus haut : un libellé, un approbateur et un type d’intervention par niveau (5 au maximum).</p>
+              <p className="small text-muted">Du niveau le plus bas au plus haut : un approbateur (sa fonction s’affiche) et un type d’intervention par niveau (5 au maximum).</p>
             </div>
             <button type="button" className="btn btn-sm btn-ghost" disabled={c.steps.length >= 5}
               onClick={() => setC((x) => ({ ...x, steps: [...x.steps, { kind: 'employee', label: '', intervention: 'approbation' }] }))}>
@@ -225,15 +226,11 @@ function CircuitEditor({ circuit, onClose, onSave }: { circuit: ApprovalCircuit;
           </div>
           <div className="ci-table" role="table" aria-label="Niveaux d’approbation">
             <div className="ci-row ci-row-head" role="row">
-              <span role="columnheader">Palier</span><span role="columnheader">Rôle / libellé</span><span role="columnheader">Approbateur désigné</span><span role="columnheader">Type d’intervention</span><span role="columnheader"><span className="sr-only">Actions</span></span>
+              <span role="columnheader">Palier</span><span role="columnheader">Approbateur désigné</span><span role="columnheader">Fonction</span><span role="columnheader">Type d’intervention</span><span role="columnheader"><span className="sr-only">Actions</span></span>
             </div>
             {c.steps.map((s, i) => (
               <div key={i} className={`ci-row ${s.intervention === 'consultation' ? 'is-consult' : ''}`} role="row">
                 <span role="cell"><span className="ci-level">Niveau {i + 1}</span></span>
-                <span role="cell">
-                  <label className="sr-only" htmlFor={`ci-label-${i}`}>Rôle, niveau {i + 1}</label>
-                  <input id={`ci-label-${i}`} value={s.label} placeholder="Ex. : DRH société" onChange={(e) => setStep(i, { label: e.target.value })} />
-                </span>
                 <span role="cell">
                   <label className="sr-only" htmlFor={`ci-appr-${i}`}>Approbateur, niveau {i + 1}</label>
                   <select id={`ci-appr-${i}`} value={approverValue(s)} onChange={(e) => setApprover(i, e.target.value)}>
@@ -243,9 +240,12 @@ function CircuitEditor({ circuit, onClose, onSave }: { circuit: ApprovalCircuit;
                       <option value="departmentHead">Responsable du département du demandeur</option>
                     </optgroup>
                     <optgroup label="Personne nommée">
-                      {people.map((p) => <option key={p.id} value={`emp:${p.id}`}>{p.firstName} {p.lastName} ({p.matricule} · {p.functionName})</option>)}
+                      {people.map((p) => <option key={p.id} value={`emp:${p.id}`}>{p.firstName} {p.lastName} ({p.matricule})</option>)}
                     </optgroup>
                   </select>
+                </span>
+                <span role="cell" className="ci-fn" title="Fonction de l’approbateur">
+                  {fnOf(s) ? <><Briefcase size={12} aria-hidden /> {fnOf(s)}</> : <span className="text-muted">—</span>}
                 </span>
                 <span role="cell">
                   <label className="sr-only" htmlFor={`ci-int-${i}`}>Type d’intervention, niveau {i + 1}</label>
