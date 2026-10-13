@@ -6,6 +6,7 @@ import type { PersonView, HrEvent, LeaveRequest } from '../../types';
 import { formatRange, formatWeekdayShort, isoWeekday, TODAY } from '../../utils/dates';
 import { eventTargets } from '../../utils/leave';
 import { formatRequestDuration } from '../../utils/hours';
+import { holidayDayMap } from '../../utils/org';
 
 interface Props {
   days: string[];
@@ -22,7 +23,7 @@ export function WeekBoard({ days, people, requests, events, onOpen, emptyText }:
   const data = useCompanyData();
   const first = days[0];
   const last = days[days.length - 1];
-  const holidays = new Map(data.holidays.filter((h) => !h.archived).map((h) => [h.date, h.name]));
+  const holidays = holidayDayMap(data.holidays);
   const cols = `minmax(150px, 190px) repeat(${days.length}, minmax(84px, 1fr))`;
   const span = (start: string, end: string) => {
     const a = Math.max(0, days.indexOf(start < first ? first : start));

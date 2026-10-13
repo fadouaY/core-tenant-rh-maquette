@@ -1,7 +1,7 @@
 // Règles métier du rattachement organisationnel : circuit hérité du département (RH-22, RH-23),
 // horaire organisationnel ou tableau de chargement (RH-6, RH-21, RH-24 à RH-26), primes (RH-8, RH-27).
 import type {
-  ApprovalCircuit, Company, Database, Department, Employee, EmployeeHistoryEntry, EmployeeNumbering, ID, NumberingEntity, ISODate, LoadingPeriod, Schedule,
+  ApprovalCircuit, Company, Database, Department, Employee, EmployeeHistoryEntry, EmployeeNumbering, Holiday, ID, NumberingEntity, ISODate, LoadingPeriod, Schedule,
 } from '../types';
 import { addDays, isoWeekday, TODAY } from './dates';
 
@@ -115,8 +115,17 @@ export function isWorkingDay(db: Database, e: Employee, date: ISODate): boolean 
 }
 
 /** Jour férié actif de la société à cette date (récurrent : même jour et même mois). */
+/** Dates couvertes par un jour férié : `days` jours consécutifs à partir de sa date. */
+export const holidayDays = (h: Pick<Holiday, 'date' | 'days'>): ISODate[] =>
+  Array.from({ length: Math.max(1, h.days ?? 1) }, (_, i) => addDays(h.date, i));
+
+/** Jours fériés actifs, jour par jour (date → nom) : une fête sur plusieurs jours compte chacun de ses jours. */
+export const holidayDayMap = (holidays: Holiday[]) =>
+  new Map(holidays.filter((h) => !h.archived).flatMap((h) => holidayDays(h).map((d) => [d, h.name] as [ISODate, string])));
+
 export const holidayOn = (db: Database, companyId: ID, date: ISODate) =>
-  db.holidays.find((h) => h.companyId === companyId && !h.archived && (h.date === date || (h.recurring && h.date.slice(5) === date.slice(5))));
+  db.holidays.find((h) => h.companyId === companyId && !h.archived
+    && holidayDays(h).some((d) => d === date || (h.recurring && d.slice(5) === date.slice(5))));
 
 /**
  * Périodes non couvertes d'un employé en tableau de chargement, de `from` (au plus tôt sa date de bascule) jusqu'à

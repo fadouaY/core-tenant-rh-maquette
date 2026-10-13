@@ -2,7 +2,7 @@
 // Une journée de solde vaut la durée de travail d'une journée de son horaire (ex. 09:00–12:30 + 14:00–18:00 = 7 h 30).
 import type { Database, ID, ISODate, LeaveRequest, Schedule, TimeSlot } from '../types';
 import { isoWeekday, TODAY } from './dates';
-import { isWorkingDay, scheduleOn } from './org';
+import { holidayDayMap, isWorkingDay, scheduleOn } from './org';
 import { profileOf } from './leave';
 
 export const toMinutes = (t: string) => { const [h, m] = t.split(':').map(Number); return h * 60 + (m || 0); };
@@ -62,7 +62,7 @@ export function countAuthorization(db: Database, employeeId: ID, date: ISODate, 
   const base: AuthorizationCount = { hours: 0, days: 0, dayHours: perDay, workingDay: false, outsideMinutes: 0, slots };
   if (!date || !from || !to || toMinutes(to) <= toMinutes(from)) return base;
   const companyId = profileOf(db, employeeId)?.companyId;
-  const holiday = db.holidays.find((h) => h.companyId === companyId && !h.archived && h.date === date)?.name;
+  const holiday = holidayDayMap(db.holidays.filter((h) => h.companyId === companyId)).get(date);
   const employee = db.employees.find((e) => e.id === employeeId);
   const workingDay = !!employee && isWorkingDay(db, employee, date) && !holiday;
   const a = toMinutes(from);
@@ -125,7 +125,7 @@ export function slotTimes(slots: TimeSlot[], step = 15) {
 export function nextWorkingDay(db: Database, employeeId: ID, from: ISODate): ISODate {
   const employee = db.employees.find((e) => e.id === employeeId);
   const companyId = profileOf(db, employeeId)?.companyId;
-  const holidays = new Set(db.holidays.filter((h) => h.companyId === companyId && !h.archived).map((h) => h.date));
+  const holidays = new Set(holidayDayMap(db.holidays.filter((h) => h.companyId === companyId)).keys());
   const d = new Date(`${from}T12:00:00`);
   for (let i = 0; i < 14; i++) {
     const iso = d.toISOString().slice(0, 10);

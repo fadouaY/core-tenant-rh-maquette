@@ -328,6 +328,8 @@ export interface Holiday extends Archivable {
   name: string;
   date: ISODate;
   recurring: boolean;
+  /** Nombre de jours consécutifs à partir de `date` (fête sur plusieurs jours, ex. Aïd) ; absent = 1. */
+  days?: number;
 }
 
 export interface Permission {

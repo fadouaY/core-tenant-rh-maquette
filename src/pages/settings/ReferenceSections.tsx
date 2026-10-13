@@ -1,12 +1,12 @@
 // Référentiels congés : horaires, règles, jours fériés (types de congé : LeaveTypesSection.tsx).
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { newId, useCompanyData, useStore } from '../../store';
-import { Badge } from '../../components/ui';
+import { Badge, Field, Modal, Switch } from '../../components/ui';
 import { Pencil } from 'lucide-react';
-import type { Schedule } from '../../types';
+import type { Holiday, Schedule } from '../../types';
 import { formatDate, formatRange, formatWeekdayShort, TODAY } from '../../utils/dates';
 import { scheduleDays, scheduleDayTypes, weeklyMinutes } from '../../utils/hours';
-import { scheduleUsage } from '../../utils/org';
+import { holidayDays, scheduleUsage } from '../../utils/org';
 import { ArchivableTable, QuickAddModal } from '../../components/settingsKit';
 import { ScheduleEditor } from './ScheduleEditor';
 
@@ -135,30 +135,77 @@ export function RulesSection() {
 }
 
 export function HolidaysSection() {
-  const { companyId, addItem, toast } = useStore();
   const data = useCompanyData();
-  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<{ holiday?: Holiday }>();
   return (
     <>
       <ArchivableTable
-        title="Jours fériés" addLabel="Ajouter un jour férié" collection="holidays" onAdd={() => setOpen(true)}
-        description={`Calendrier propre à ${data.company.name} (${data.company.city}). Les jours fériés actifs sont exclus du décompte.`}
+        title="Jours fériés" addLabel="Ajouter un jour férié" collection="holidays" onAdd={() => setEditing({})}
+        description={`Calendrier propre à ${data.company.name} (${data.company.city}). Une fête peut durer plusieurs jours (ex. Aïd) : chaque jour est exclu du décompte des congés.`}
         rows={[...data.holidays].sort((a, b) => a.date.localeCompare(b.date))} nameOf={(h) => h.name}
+        rowActions={(h) => (
+          <button type="button" className="btn btn-sm btn-ghost" disabled={h.archived} onClick={() => setEditing({ holiday: h })} aria-label={`Modifier ${h.name}`}><Pencil size={13} aria-hidden /> Modifier</button>
+        )}
         columns={[
-          { header: 'Date', className: 'nowrap', render: (h) => <><span className="text-muted small">{formatWeekdayShort(h.date)}</span> {formatDate(h.date)}</> },
+          { header: 'Date', className: 'nowrap', render: (h) => {
+            const days = holidayDays(h);
+            return days.length > 1
+              ? <><span className="text-muted small">{formatWeekdayShort(h.date)}</span> {formatRange(h.date, days[days.length - 1])}</>
+              : <><span className="text-muted small">{formatWeekdayShort(h.date)}</span> {formatDate(h.date)}</>;
+          } },
           { header: 'Nom', render: (h) => <span className="person-name">{h.name}</span> },
+          { header: 'Durée', render: (h) => ((h.days ?? 1) > 1 ? <Badge tone="primary">{h.days} jours</Badge> : <span className="small">1 jour</span>) },
           { header: 'Récurrence', render: (h) => (h.recurring ? <Badge tone="info">Chaque année</Badge> : <Badge tone="neutral">Ponctuel</Badge>) },
         ]}
       />
-      <QuickAddModal open={open} onClose={() => setOpen(false)} title="Nouveau jour férié"
-        initial={{ name: '', date: '', recurring: false }}
-        fields={[
-          { key: 'name', label: 'Nom', type: 'text', required: true },
-          { key: 'date', label: 'Date', type: 'date', required: true },
-          { key: 'recurring', label: 'Se répète chaque année', type: 'checkbox' },
-        ]}
-        onSubmit={(v) => { addItem('holidays', { id: newId('h'), companyId, name: String(v.name), date: String(v.date), recurring: !!v.recurring }); toast('Jour férié ajouté'); }}
-      />
+      <HolidayModal state={editing} onClose={() => setEditing(undefined)} />
     </>
+  );
+}
+
+/** Jour férié : nom, date de début, nombre de jours (1 à 10) et récurrence annuelle. */
+function HolidayModal({ state, onClose }: { state?: { holiday?: Holiday }; onClose: () => void }) {
+  const { companyId, addItem, updateItem, toast } = useStore();
+  const h = state?.holiday;
+  const [f, setF] = useState({ name: '', date: '', days: '1', recurring: false });
+  const [submitted, setSubmitted] = useState(false);
+  useEffect(() => {
+    if (!state) return;
+    setSubmitted(false);
+    setF({ name: h?.name ?? '', date: h?.date ?? '', days: String(h?.days ?? 1), recurring: h?.recurring ?? false });
+  }, [state, h]);
+  if (!state) return null;
+
+  const days = Number(f.days);
+  const end = f.date && Number.isInteger(days) && days >= 1 ? holidayDays({ date: f.date, days })[days - 1] : undefined;
+  const errors: Record<string, string> = {};
+  if (!f.name.trim()) errors.name = 'Nom requis.';
+  if (!f.date) errors.date = 'Date requise.';
+  if (!(Number.isInteger(days) && days >= 1 && days <= 10)) errors.days = 'Entre 1 et 10 jours.';
+  const err = (k: string) => (submitted ? errors[k] : undefined);
+
+  const save = () => {
+    setSubmitted(true);
+    if (Object.keys(errors).length) return;
+    const saved: Holiday = { ...(h ?? { id: newId('h'), companyId }), name: f.name.trim(), date: f.date, days: days > 1 ? days : undefined, recurring: f.recurring };
+    if (h) updateItem('holidays', saved); else addItem('holidays', saved);
+    toast(`Jour férié « ${saved.name} » ${h ? 'mis à jour' : 'ajouté'}${days > 1 ? ` — ${days} jours` : ''}`);
+    onClose();
+  };
+
+  return (
+    <Modal open onClose={onClose} title={h ? `Modifier « ${h.name} »` : 'Nouveau jour férié'}
+      footer={<><span className="spacer" /><button type="button" className="btn btn-ghost" onClick={onClose}>Annuler</button><button type="button" className="btn btn-primary" onClick={save}>{h ? 'Enregistrer' : 'Ajouter'}</button></>}>
+      <div className="form-grid">
+        <Field label="Nom" required error={err('name')} className="span-2">{(id) => <input id={id} value={f.name} placeholder="Ex. : Aïd Al Fitr" onChange={(e) => setF({ ...f, name: e.target.value })} />}</Field>
+        <Field label="Date (premier jour)" required error={err('date')}>{(id) => <input id={id} type="date" value={f.date} onChange={(e) => setF({ ...f, date: e.target.value })} />}</Field>
+        <Field label="Nombre de jours" required error={err('days')} hint={end && days > 1 ? `Du ${formatDate(f.date)} au ${formatDate(end)} inclus.` : 'Une fête sur plusieurs jours (ex. Aïd) : 2 ou 3.'}>
+          {(id) => <span className="input-suffix"><input id={id} type="number" min={1} max={10} step={1} value={f.days} onChange={(e) => setF({ ...f, days: e.target.value })} /><span aria-hidden>jour{days > 1 ? 's' : ''}</span></span>}
+        </Field>
+      </div>
+      <div className="mt-12">
+        <Switch checked={f.recurring} onChange={(v) => setF({ ...f, recurring: v })} label="Se répète chaque année à la même date" />
+      </div>
+    </Modal>
   );
 }

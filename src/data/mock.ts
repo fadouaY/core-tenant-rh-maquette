@@ -175,6 +175,8 @@ const holidays: Holiday[] = [
   { id: 'h1', companyId: 'c1', name: "Jour de l'An", date: '2026-01-01', recurring: true },
   { id: 'h2', companyId: 'c1', name: 'Manifeste de l’Indépendance', date: '2026-01-11', recurring: true },
   { id: 'h3', companyId: 'c1', name: 'Fête du Travail', date: '2026-05-01', recurring: true },
+  { id: 'h9', companyId: 'c1', name: 'Aïd Al Adha', date: '2026-05-27', recurring: false, days: 2 },
+  { id: 'h10', companyId: 'c1', name: 'Aïd Al Fitr 2027', date: '2027-03-10', recurring: false, days: 2 },
   { id: 'h4', companyId: 'c1', name: 'Fête du Trône', date: '2026-07-30', recurring: true },
   { id: 'h5', companyId: 'c1', name: 'Marche Verte', date: '2026-11-06', recurring: true },
   { id: 'h6', companyId: 'c1', name: "Fête de l'Indépendance", date: '2026-11-18', recurring: true },

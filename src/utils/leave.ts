@@ -1,7 +1,7 @@
 // Calculs de démonstration des congés : ces règles sont des exemples, pas des règles métier définitives.
 import type { ApprovalStep, Database, DayPart, Employee, HrEvent, ID, ISODate, LeaveProfile, PersonView } from '../types';
 import { eachDay, overlaps } from './dates';
-import { approversFor, circuitOfEmployee, isWorkingDay, rootDepartment, scheduleOn } from './org';
+import { approversFor, circuitOfEmployee, holidayDayMap, isWorkingDay, rootDepartment, scheduleOn } from './org';
 
 export interface LeaveCount {
   calendarDays: number;
@@ -23,9 +23,7 @@ export function countLeaveDays(
   if (!profile || !employee || !start || !end || end < start) return empty;
   // Jours travaillés selon l'horaire en vigueur chaque jour (il peut changer d'une période de chargement à l'autre).
   const isWorkDay = (d: ISODate) => isWorkingDay(db, employee, d);
-  const holidayMap = new Map(
-    db.holidays.filter((h) => h.companyId === profile.companyId && !h.archived).map((h) => [h.date, h.name]),
-  );
+  const holidayMap = holidayDayMap(db.holidays.filter((h) => h.companyId === profile.companyId));
   const days = eachDay(start, end);
   let nonWorking = 0;
   const holidays: LeaveCount['holidays'] = [];

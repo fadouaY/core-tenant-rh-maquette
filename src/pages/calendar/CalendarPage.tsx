@@ -9,6 +9,7 @@ import {
   addDays, addMonths, eachDay, endOfMonth, formatDate, formatDayMonth, formatMonth, isoWeekday, overlaps, startOfMonth, startOfWeek, TODAY,
 } from '../../utils/dates';
 import { eventTargets } from '../../utils/leave';
+import { holidayDayMap } from '../../utils/org';
 
 type Mode = 'mois' | 'semaine';
 type Scope = 'equipe' | 'perso';
@@ -119,7 +120,7 @@ function MonthGrid({ days, cursor, leaves, events, onOpen, showNames }: {
 }) {
   const data = useCompanyData();
   const month = cursor.slice(0, 7);
-  const holidays = new Map(data.holidays.filter((h) => !h.archived).map((h) => [h.date, h.name]));
+  const holidays = holidayDayMap(data.holidays);
   return (
     <div className="month-wrap">
       <div className="month-grid" role="grid" aria-label={formatMonth(cursor)}>
